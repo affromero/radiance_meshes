@@ -1,0 +1,9 @@
+[submodule "dtet/pybind11"]
+	path = dtet/pybind11
+	url = https://github.com/pybind/pybind11.git
+[submodule "dtet/cgal"]
+	path = dtet/cgal
+	url = https://github.com/CGAL/cgal.git
+[submodule "dtet/NumCpp"]
+	path = dtet/NumCpp
+	url = https://github.com/dpilger26/NumCpp.git
