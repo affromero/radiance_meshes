@@ -49,11 +49,12 @@ def render_alpha_blend_tiles_slang_raw(indices, vertices,
 
     # torch.cuda.synchronize()
     # st = time.time()
+    tet_vertices = vertices[indices]
     image_rgb = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
         tile_ranges,
         indices,
-        vertices,
+        tet_vertices,
         rgbs,
         render_grid,
         world_view_transform,

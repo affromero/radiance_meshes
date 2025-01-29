@@ -155,20 +155,19 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
                              tile_height=tile_size,
                              tile_width=tile_size)
     st = time.time()
-    densities = safe_exp(model.vertex_s_param)
     sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _ = vertex_and_tile_shader(
         model.indices,
         model.vertices,
-        densities,
+        model.vertices,
         world_view_transform,
         K,
         cam_pos,
         camera.fovy,
         camera.fovx,
         render_grid)
-    # cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
-    # cell_values[mask] = model.get_cell_values(camera, mask)
-    cell_values = model.get_cell_values(camera)
+    cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
+    cell_values[mask] = model.get_cell_values(camera, mask)
+    # cell_values = model.get_cell_values(camera)
     tet_grads = []
     if register_tet_hook:
         cell_values.register_hook(lambda d: tet_grads.append(d))
@@ -181,12 +180,13 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
     except:
         pass
 
+    tet_vertices = model.vertices[model.indices]
     # st = time.time()
     image_rgb = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
         tile_ranges,
         model.indices,
-        model.vertices,
+        tet_vertices,
         cell_values,
         render_grid,
         world_view_transform,

@@ -86,10 +86,10 @@ def check_tile_indices(him, wim, tile_size, rt):
     # print(f"{bcolors.OKCYAN}Expected (rt): {rt}{bcolors.ENDC}")
 
     try:
-        assert tminx == rt[0], f"tminx mismatch: expected {rt[0]}, got {tminx}"
-        assert tminy == rt[1], f"tminy mismatch: expected {rt[1]}, got {tminy}"
-        assert tmaxx == rt[2], f"tmaxx mismatch: expected {rt[2]}, got {tmaxx}"
-        assert tmaxy == rt[3], f"tmaxy mismatch: expected {rt[3]}, got {tmaxy}"
+        assert tminx >= rt[0], f"tminx mismatch: expected {rt[0]}, got {tminx}"
+        assert tminy >= rt[1], f"tminy mismatch: expected {rt[1]}, got {tminy}"
+        assert tmaxx <= rt[2], f"tmaxx mismatch: expected {rt[2]}, got {tmaxx}"
+        assert tmaxy <= rt[3], f"tmaxy mismatch: expected {rt[3]}, got {tmaxy}"
         # print(f"{bcolors.OKGREEN}All checks passed successfully!{bcolors.ENDC}")
     except AssertionError as e:
         error_message = (

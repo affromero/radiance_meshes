@@ -135,7 +135,7 @@ bool ray_triangle_intersect2(in float3 ray_origin,
                              in float3 tri_c,
                              out float t)
 {
-    t = -1;
+    // t = -1;
     float3 edge1 = tri_b - tri_a;
     float3 edge2 = tri_c - tri_a;
     float3 ray_cross_e2 = cross(ray_vector, edge2);
@@ -166,36 +166,37 @@ float ray_tetrahedron_intersect(float3 orig, float3 dir, Tetrahedra g) {
     float3 v1 = g.verts[1];
     float3 v2 = g.verts[2];
     float3 v3 = g.verts[3];
+
     bool hit = false;
     float t_enter = FLT_MAX;
     float t_exit = -FLT_MAX;
-    float3 ndir = normalize(dir);
-    float3 off_orig = orig;
+    // if (point_in_tetrahedron(g, orig)) {
+    //     t_enter = 0;
+    // }
 
     // Check intersection with each face of the tetrahedron
     float t;
-    if (ray_triangle_intersect(off_orig, ndir, v0, v1, v2, t)) {
+    if (ray_triangle_intersect(orig, dir, v0, v1, v2, t)) {
         hit = true;
         t_enter = min(t_enter, t);
         t_exit = max(t_exit, t);
     }
-    if (ray_triangle_intersect(off_orig, ndir, v0, v1, v3, t)) {
+    if (ray_triangle_intersect(orig, dir, v0, v1, v3, t)) {
         hit = true;
         t_enter = min(t_enter, t);
         t_exit = max(t_exit, t);
     }
-    if (ray_triangle_intersect(off_orig, ndir, v0, v2, v3, t)) {
+    if (ray_triangle_intersect(orig, dir, v0, v2, v3, t)) {
         hit = true;
         t_enter = min(t_enter, t);
         t_exit = max(t_exit, t);
     }
-    if (ray_triangle_intersect(off_orig, ndir, v1, v2, v3, t)) {
+    if (t_enter > t_exit) return -1; // early exit
+
+    if (ray_triangle_intersect(orig, dir, v1, v2, v3, t)) {
         hit = true;
         t_enter = min(t_enter, t);
         t_exit = max(t_exit, t);
-    }
-    if (point_in_tetrahedron(g, off_orig)) {
-        t_enter = 0;
     }
 
     if (hit) {
@@ -203,4 +204,188 @@ float ray_tetrahedron_intersect(float3 orig, float3 dir, Tetrahedra g) {
     } else {
         return -1;
     }
+}
+
+[Differentiable]
+float ray_tetrahedron_intersect_fused(
+    float3 orig, float3 dir,
+    float3 v0, float3 v1, float3 v2, float3 v3)
+{
+    // --------------------------------------------------------------------
+    // 1. Compute plane equations for the 4 faces (outward normals)
+    //    n[i].x, n[i].y, n[i].z, and d[i]
+    // --------------------------------------------------------------------
+
+    // Face 0: (v0, v1, v2)
+    float3 n0 = cross(v1 - v0, v2 - v0);
+    if (dot(n0, v3 - v0) > 0) {
+        n0 = -n0;
+    }
+    float d0 = -dot(n0, v0);
+
+    // Face 1: (v0, v1, v3)
+    float3 n1 = cross(v1 - v0, v3 - v0);
+    if (dot(n1, v2 - v0) > 0) {
+        n1 = -n1;
+    }
+    float d1 = -dot(n1, v0);
+
+    // Face 2: (v0, v2, v3)
+    float3 n2 = cross(v2 - v0, v3 - v0);
+    if (dot(n2, v1 - v0) > 0) {
+        n2 = -n2;
+    }
+    float d2 = -dot(n2, v0);
+
+    // Face 3: (v1, v2, v3)
+    float3 n3 = cross(v2 - v1, v3 - v1);
+    if (dot(n3, v0 - v1) > 0) {
+        n3 = -n3;
+    }
+    float d3 = -dot(n3, v1);
+
+    // --------------------------------------------------------------------
+    // 2. Initialize the intersection range [t_enter, t_exit]
+    //    You might prefer (-∞, +∞), but this variant starts at [0, big].
+    // --------------------------------------------------------------------
+    float t_enter = 0.0f;
+    float t_exit  = 1e30f;
+    float eps     = 1e-10f;
+
+    // --------------------------------------------------------------------
+    // 3. Clip against Plane 0
+    // --------------------------------------------------------------------
+    {
+        float dist0  = dot(n0, orig) + d0;
+        float denom0 = dot(n0, dir);
+
+        if (fabs(denom0) < eps) {
+            // Ray is almost parallel to plane
+            if (dist0 > 0.0f) {
+                // Entire ray is outside
+                return -1.0f;
+            }
+        }
+        else {
+            float tplane = -dist0 / denom0;
+            if (denom0 < 0.0f) {
+                // Ray entering at this t
+                if (tplane > t_enter) {
+                    t_enter = tplane;
+                }
+            }
+            else {
+                // Ray exiting
+                if (tplane < t_exit) {
+                    t_exit = tplane;
+                }
+            }
+        }
+
+        if (t_enter > t_exit) {
+            return -1.0f;
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // 4. Clip against Plane 1
+    // --------------------------------------------------------------------
+    {
+        float dist1  = dot(n1, orig) + d1;
+        float denom1 = dot(n1, dir);
+
+        if (fabs(denom1) < eps) {
+            if (dist1 > 0.0f) {
+                return -1.0f;
+            }
+        }
+        else {
+            float tplane = -dist1 / denom1;
+            if (denom1 < 0.0f) {
+                if (tplane > t_enter) {
+                    t_enter = tplane;
+                }
+            }
+            else {
+                if (tplane < t_exit) {
+                    t_exit = tplane;
+                }
+            }
+        }
+
+        if (t_enter > t_exit) {
+            return -1.0f;
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // 5. Clip against Plane 2
+    // --------------------------------------------------------------------
+    {
+        float dist2  = dot(n2, orig) + d2;
+        float denom2 = dot(n2, dir);
+
+        if (fabs(denom2) < eps) {
+            if (dist2 > 0.0f) {
+                return -1.0f;
+            }
+        }
+        else {
+            float tplane = -dist2 / denom2;
+            if (denom2 < 0.0f) {
+                if (tplane > t_enter) {
+                    t_enter = tplane;
+                }
+            }
+            else {
+                if (tplane < t_exit) {
+                    t_exit = tplane;
+                }
+            }
+        }
+
+        if (t_enter > t_exit) {
+            return -1.0f;
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // 6. Clip against Plane 3
+    // --------------------------------------------------------------------
+    {
+        float dist3  = dot(n3, orig) + d3;
+        float denom3 = dot(n3, dir);
+
+        if (fabs(denom3) < eps) {
+            if (dist3 > 0.0f) {
+                return -1.0f;
+            }
+        }
+        else {
+            float tplane = -dist3 / denom3;
+            if (denom3 < 0.0f) {
+                if (tplane > t_enter) {
+                    t_enter = tplane;
+                }
+            }
+            else {
+                if (tplane < t_exit) {
+                    t_exit = tplane;
+                }
+            }
+        }
+
+        if (t_enter > t_exit) {
+            return -1.0f;
+        }
+    }
+
+    // --------------------------------------------------------------------
+    // 7. Final intersection range
+    //    Return the clipped segment length if it's in front of the origin
+    // --------------------------------------------------------------------
+    if (t_exit <= 0.0f) {
+        return -1.0f;
+    }
+    return max(t_exit - max(t_enter, 0.0f), 0.0f);
 }

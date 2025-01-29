@@ -16,12 +16,12 @@ import time
 from pathlib import Path
 from typing import *
 
-import slangpy
+import slangtorch
 import torch
 from torch.autograd import Function
 from icecream import ic
 
-kernels = slangpy.loadModule(
+kernels = slangtorch.loadModule(
     str(Path(__file__).parent / "slang/sh_kernel.slang")
 )
 

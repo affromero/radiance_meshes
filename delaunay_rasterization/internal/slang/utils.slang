@@ -25,6 +25,10 @@ struct Ray : IDifferentiable
     float3 o, d;
 }
 
+struct Triangle2D {
+    float2 a, b, c;
+}
+
 struct Camera : IDifferentiable
 {
     float4x4 world_view_transform;
@@ -72,6 +76,12 @@ float read_t1_float(uint32_t idx, DiffTensorView t1)
     return t1[uint2(idx, 0)];
 }
 
+float3 read_t3_float3(uint32_t idx, TensorView<float> t3)
+{
+    return float3(t3[uint2(idx, 0)],
+                  t3[uint2(idx, 1)],
+                  t3[uint2(idx, 2)]);
+}
 [Differentiable]
 float3 read_t3_float3(uint32_t idx, DiffTensorView t3)
 {
@@ -179,6 +189,13 @@ float3 camspace2image_w_depth(float3 cam_space_nohomo, Camera cam) {
     return pix_space;
 }
 
+float2 point2image(float3 point, Camera cam) {
+    float4 cam_space_homo = mul(cam.world_view_transform, float4(point, 1.f));
+    float3 cam_space_nohomo = safe_div(cam_space_homo.xyz, cam_space_homo.w);
+    float3 pix_space = mul(cam.K, float3(safe_div(cam_space_nohomo.xy, abs(cam_space_nohomo.z) + eps), 1.f));
+    return { pix_space.x, pix_space.y };
+}
+
 [Differentiable]
 float3 project_point_w_depth(float3 point, Camera cam) {
     float4 cam_space_homo = mul(cam.world_view_transform, float4(point, 1.f));
@@ -250,6 +267,17 @@ Tetrahedra load_tetrahedra(DiffTensorView vertices,
     return { tetra };
 }
 
+Tetrahedra load_tetrahedra(TensorView<float> vertices,
+                           uint4 virtual_tetra)
+{
+    float3[4] tetra = {
+        read_t3_float3(virtual_tetra.x, vertices),
+        read_t3_float3(virtual_tetra.y, vertices),
+        read_t3_float3(virtual_tetra.z, vertices),
+        read_t3_float3(virtual_tetra.w, vertices),
+    };
+    return { tetra };
+}
 [Differentiable]
 float compute_det(float2x2 M) {
     return M[0][0] * M[1][1] - M[0][1] * M[1][0];
@@ -476,14 +504,34 @@ float3 calculate_circumcenter(Tetrahedra tet)
     return tet.verts[0] + relative_circumcenter;
 }
 
+// [Differentiable]
+// SplatTetrahedra load_tet_alphablend(int32_t g_idx,
+//                                     DiffTensorView vertices,
+//                                     TensorView<int32_t> indices,
+//                                     DiffTensorView rgbs)
+// {
+//     uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
+//     Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+//     return {
+//         tet,
+//         read_t4_float4(g_idx, rgbs)
+//     };
+// }
+
 [Differentiable]
 SplatTetrahedra load_tet_alphablend(int32_t g_idx,
-                                    DiffTensorView vertices,
+                                    DiffTensorView tet_vertices,
                                     TensorView<int32_t> indices,
                                     DiffTensorView rgbs)
 {
-    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
-    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+    // uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
+    Tetrahedra tet = {
+        { { tet_vertices[uint3(g_idx, 0, 0)], tet_vertices[uint3(g_idx, 0, 1)], tet_vertices[uint3(g_idx, 0, 2)] },
+            { tet_vertices[uint3(g_idx, 1, 0)], tet_vertices[uint3(g_idx, 1, 1)], tet_vertices[uint3(g_idx, 1, 2)] },
+            { tet_vertices[uint3(g_idx, 2, 0)], tet_vertices[uint3(g_idx, 2, 1)], tet_vertices[uint3(g_idx, 2, 2)] },
+            { tet_vertices[uint3(g_idx, 3, 0)], tet_vertices[uint3(g_idx, 3, 1)], tet_vertices[uint3(g_idx, 3, 2)] },
+        }
+    };
     return {
         tet,
         read_t4_float4(g_idx, rgbs)
@@ -519,6 +567,7 @@ float4 evaluate_tetra(SplatTetrahedra g,
                       float3 ray_d)
 {
     float dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
+    // float dist = ray_tetrahedron_intersect_fused(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
     if (dist <= 0) {
         return {0.f, 0.f, 0.f, 0.f};
     } else {
@@ -586,4 +635,20 @@ void printTetrahedra(const Tetrahedra t) {
         t.verts[2].x, t.verts[2].y, t.verts[2].z,
         t.verts[3].x, t.verts[3].y, t.verts[3].z
     );
+}
+
+bool is_point_inside_triangle(float2 p, Triangle2D tri) {
+    // Compute barycentric coordinates
+    float2 v0 = tri.b - tri.a;
+    float2 v1 = tri.c - tri.a;
+    float2 v2 = p - tri.a;
+    float d00 = dot(v0, v0);
+    float d01 = dot(v0, v1);
+    float d11 = dot(v1, v1);
+    float d20 = dot(v2, v0);
+    float d21 = dot(v2, v1);
+    float denom = d00 * d11 - d01 * d01;
+    float u = safe_div((d11 * d20 - d01 * d21), denom);
+    float v = safe_div((d00 * d21 - d01 * d20), denom);
+    return (u >= 0) && (v >= 0) && (u + v <= 1);
 }

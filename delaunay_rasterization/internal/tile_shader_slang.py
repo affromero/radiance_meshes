@@ -64,6 +64,8 @@ def vertex_and_tile_shader(indices,
         # h = rect_tile_space[:, 3] - rect_tile_space[:, 1]
         # tiles_touched = w * h
         index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)
+        # ic(tiles_touched.long().sum(), tiles_touched.sum(), tiles_touched.max(), tiles_touched)
+        # ic(rect_tile_space, vs_tetra[:, 2], vertices)
         total_size_index_buffer = index_buffer_offset[-1]
         unsorted_keys = torch.zeros((total_size_index_buffer,), 
                                     device="cuda", 
@@ -73,6 +75,30 @@ def vertex_and_tile_shader(indices,
                                          dtype=torch.int32)
         # ic(total_size_index_buffer, tiles_touched.max(), index_buffer_offset.max(), tiles_touched.long().sum())
         # must be positive for key sort
+
+        # slang_modules.tile_shader.generate_keys_smart(xyz_vs=vs_tetra,
+        #                                         vertices=vertices,
+        #                                         indices=indices,
+        #                                         rect_tile_space=rect_tile_space,
+        #                                         index_buffer_offset=index_buffer_offset,
+        #                                         out_unsorted_keys=unsorted_keys,
+        #                                         out_unsorted_gauss_idx=unsorted_tetra_idx,
+        #                                         grid_height=render_grid.grid_height,
+        #                                         grid_width=render_grid.grid_width,
+        #                                         fovy=fovy,
+        #                                         fovx=fovx,
+        #                                         world_view_transform=world_view_transform,
+        #                                         K=K,
+        #                                         cam_pos=cam_pos,
+        #                                         tiles_touched=tiles_touched,
+        #                                         image_height=render_grid.image_height,
+        #                                         image_width=render_grid.image_width,
+        #                                         tile_height=render_grid.tile_height,
+        #                                         tile_width=render_grid.tile_width).launchRaw(
+        #       blockSize=(256, 1, 1),
+        #       gridSize=(ceil_div(n_tetra, 256), 1, 1)
+        # )
+
         slang_modules.tile_shader.generate_keys(xyz_vs=vs_tetra,
                                                 rect_tile_space=rect_tile_space,
                                                 index_buffer_offset=index_buffer_offset,
@@ -85,11 +111,11 @@ def vertex_and_tile_shader(indices,
         )
 
         highest_tile_id_msb = (render_grid.grid_width*render_grid.grid_height).bit_length()
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         sorted_keys, sorted_tetra_idx = sort_by_keys_cub.sort_by_keys(
             unsorted_keys, unsorted_tetra_idx, highest_tile_id_msb)
 
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         tile_ranges = torch.zeros((render_grid.grid_height*render_grid.grid_width, 2), 
                                   device="cuda",
                                   dtype=torch.int32)
@@ -98,8 +124,12 @@ def vertex_and_tile_shader(indices,
                 blockSize=(256, 1, 1),
                 gridSize=(ceil_div(total_size_index_buffer, 256).item(), 1, 1)
         )
+        s = (sorted_keys==0).sum()
+        if s > 1:
+            tile_ranges[0, 0] = s-1
         torch.cuda.synchronize()
-        # ic(tlen.min(), tlen.max(), tlen.float().mean())
+        tlen = tile_ranges[:, 1] - tile_ranges[:, 0]
+        # ic(tlen.min(), tlen.max(), tlen.float().mean(), tile_ranges, sorted_keys)
         # if tile_ranges[-1, 1] != total_size_index_buffer:
         #     tlen = tile_ranges[:, 1] - tile_ranges[:, 0]
         #     inds = torch.arange(sorted_keys.shape[0], device=sorted_keys.device)
@@ -128,6 +158,7 @@ class VertexShader(torch.autograd.Function):
                 world_view_transform, K, cam_pos,
                 fovy, fovx,
                 render_grid, device="cuda"):
+        assert not torch.isnan(vertices).any(), "Tensor contains NaN values!"
         n_tetra = indices.shape[0]
         tiles_touched = torch.zeros((n_tetra), 
                                     device="cuda", 

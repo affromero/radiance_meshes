@@ -30,7 +30,7 @@ class Model:
         self.device = vertices.device
 
     @staticmethod
-    def init_from_pcd(point_cloud, sh_deg, device):
+    def init_from_pcd(point_cloud, cameras, sh_deg, device):
         dim = 1 + 3*(sh_deg+1)**2
         torch.manual_seed(2)
         N = point_cloud.points.shape[0]
@@ -96,12 +96,14 @@ class Model:
 
     def __len__(self):
         return self.vertices.shape[0]
+
+    def regularizer(self):
+        return 0.0
         
 
 class TetOptimizer:
     def __init__(self,
                  model: Model,
-                 view_net_lr: float=1e-3,
                  s_param_lr: float=0.025,
                  rgb_param_lr: float=0.025,
                  sh_param_lr: float=0.00025,
@@ -121,6 +123,9 @@ class TetOptimizer:
         self.tracker_n = 0
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
+
+    def update_ema(self):
+        pass
 
     def add_points(self,
                    new_verts: torch.Tensor,
@@ -182,3 +187,9 @@ class TetOptimizer:
         self.tracker_n = 0
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
+
+    def main_step(self):
+        self.optim.step()
+
+    def main_zero_grad(self):
+        self.optim.zero_grad()

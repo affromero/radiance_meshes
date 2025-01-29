@@ -16,7 +16,6 @@ from icecream import ic
 from data import loader
 import random
 import time
-import tinycudann as tcnn
 from tqdm import tqdm
 import numpy as np
 # from dtet import DelaunayTriangulation
@@ -25,6 +24,7 @@ from gDel3D.build.gdel3d import Del
 from utils import cam_util
 from utils.train_util import *
 from models.vertex_color import Model, TetOptimizer
+# from models.ingp_color import Model, TetOptimizer
 from utils import viz_util
 from plyfile import PlyData, PlyElement
 from utils.graphics_utils import l2_normalize_th
@@ -80,35 +80,35 @@ sh_deg = 3
 
 camera = train_cameras[0]
 
-tile_size = 4
+tile_size = 16
 
 device = torch.device('cuda')
-model = Model.init_from_pcd(scene_info.point_cloud, 2, device)
+model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, 2, device)
 tet_optim = TetOptimizer(model)
 
 images = []
 psnrs = [[]]
 inds = []
 
-args = lambda x: x
-args.start_tracking = 000
-args.cloning_interval = 500
-args.budget = 1_000_000
-args.num_densification_samples = len(train_cameras)
-args.densify_start = 1500
-args.num_densify_iter = 16000 - args.densify_start
-args.num_iter = 30000
-args.sh_degree_interval = 2000
-
 # args = lambda x: x
 # args.start_tracking = 000
 # args.cloning_interval = 500
 # args.budget = 500_000
-# args.num_densification_samples = 50
-# args.num_densify_iter = 2500
-# args.densify_start = 1000
-# args.num_iter = args.densify_start + args.num_densify_iter + 1500
-# args.sh_degree_interval = 500
+# args.num_densification_samples = len(train_cameras)
+# args.densify_start = 1500
+# args.num_densify_iter = 16000 - args.densify_start
+# args.num_iter = 30000
+# args.sh_degree_interval = 2000
+
+args = lambda x: x
+args.start_tracking = 000
+args.cloning_interval = 500
+args.budget = 500_000
+args.num_densification_samples = 50
+args.num_densify_iter = 2500
+args.densify_start = 1500
+args.num_iter = 100#args.densify_start + args.num_densify_iter + 1500
+args.sh_degree_interval = 500
 
 def target_num(x):
     S = model.vertices.shape[0]
@@ -139,7 +139,7 @@ for train_ind in progress_bar:
     target = camera.original_image.cuda()
 
     st = time.time()
-    render_pkg = render(camera, model)
+    render_pkg = render(camera, model, tile_size=tile_size)
     # torch.cuda.synchronize()
     # print(f'render: {(time.time()-st)}')
     image = render_pkg['render']
@@ -147,12 +147,13 @@ for train_ind in progress_bar:
     # ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
     # lambda_ssim = 0.2
     # loss = (1-lambda_ssim)*l2_loss + lambda_ssim*ssim_loss
-    loss = l2_loss
+    reg = model.regularizer()
+    loss = l2_loss + reg
  
     st = time.time()
     loss.backward()
-    tet_optim.optim.step()
-    tet_optim.optim.zero_grad()
+    tet_optim.main_step()
+    tet_optim.main_zero_grad()
 
     if do_tracking:
         tet_optim.track_gradients()
@@ -165,6 +166,7 @@ for train_ind in progress_bar:
         tet_optim.vertex_optim.step()
         tet_optim.vertex_optim.zero_grad()
     # print(f'bw: {(time.time()-st)}')
+    tet_optim.update_ema()
 
     if do_sh:
         model.sh_up()
@@ -182,7 +184,7 @@ for train_ind in progress_bar:
         sampled_cameras = [train_cameras[i] for i in full_inds[:args.num_densification_samples]]
         tet_rgbs_grad = None
         for camera in sampled_cameras:
-            render_pkg = render(camera, model, register_tet_hook=True)
+            render_pkg = render(camera, model, register_tet_hook=True, tile_size=tile_size)
             # torch.cuda.synchronize()
             # print(f'render: {(time.time()-st)}')
             image = render_pkg['render']
@@ -260,7 +262,7 @@ for train_ind in progress_bar:
         if train_ind % 1 == 0:
             train_ind = 1
             camera = train_cameras[train_ind]
-            render_pkg = render(camera, model)
+            render_pkg = render(camera, model, tile_size=tile_size)
             image = render_pkg['render']
             image = image.permute(1, 2, 0)
             image = image.detach().cpu().numpy()
@@ -283,7 +285,7 @@ torch.cuda.empty_cache()
 epath = cam_util.generate_cam_path(train_cameras, 400)
 eimages = []
 for camera in tqdm(epath):
-    render_pkg = render(camera, model)
+    render_pkg = render(camera, model, tile_size=tile_size)
     image = render_pkg['render']
     image = image.permute(1, 2, 0)
     image = image.detach().cpu().numpy()

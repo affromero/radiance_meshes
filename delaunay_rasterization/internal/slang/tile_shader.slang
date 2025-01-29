@@ -13,6 +13,112 @@
 // limitations under the License.
 
 import utils;
+import intersect;
+import minkowski;
+
+[AutoPyBindCUDA]
+[CUDAKernel]
+void generate_keys_smart(TensorView<float> xyz_vs,
+                   TensorView<float> vertices,
+                   TensorView<int32_t> indices,
+                   TensorView<int32_t> rect_tile_space,
+                   TensorView<int32_t> index_buffer_offset,
+                   TensorView<int64_t> out_unsorted_keys,
+                   TensorView<int32_t> out_unsorted_gauss_idx,
+                   uint grid_height,
+                   uint grid_width,
+                   no_diff float fovy,
+                   no_diff float fovx,
+                   TensorView<float> world_view_transform,
+                   TensorView<float> K,
+                   TensorView<float> cam_pos,
+                   TensorView<int32_t> tiles_touched,
+                   uint image_height,
+                   uint image_width,
+                   uint tile_height,
+                   uint tile_width)
+{
+    int32_t globalIdx = cudaBlockIdx().x * cudaBlockDim().x + cudaThreadIdx().x;
+
+    if (globalIdx >= xyz_vs.size(0))
+        return;
+
+    float3 ndc_xyz = {
+        xyz_vs[uint2(globalIdx, 0)],
+        xyz_vs[uint2(globalIdx, 1)],
+        xyz_vs[uint2(globalIdx, 2)]
+    };
+
+    // Find this Gaussian's offset in buffer for writing keys/values.
+    int32_t offset, start_offset;
+    if (globalIdx == 0) {
+        start_offset = 0;
+        offset = 0;
+    } else {
+        offset = index_buffer_offset[globalIdx - 1];
+        start_offset = offset;
+    }
+
+    int32_t rect_min_x = rect_tile_space[uint2(globalIdx, 0)];
+    int32_t rect_min_y = rect_tile_space[uint2(globalIdx, 1)];
+    int32_t rect_max_x = rect_tile_space[uint2(globalIdx, 2)];
+    int32_t rect_max_y = rect_tile_space[uint2(globalIdx, 3)];
+
+    Camera cam = load_camera(world_view_transform, K, cam_pos, fovy, fovx, image_height, image_width);
+    uint4 virtual_tet = load_virtual_tetrahedra(globalIdx, indices);
+    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+    float2 points2d[4];
+    points2d[0] = point2image(tet.verts[0], cam);
+    points2d[1] = point2image(tet.verts[1], cam);
+    points2d[2] = point2image(tet.verts[2], cam);
+    points2d[3] = point2image(tet.verts[3], cam);
+    Triangle2D tris[4];
+    // float m = 1.5 * sqrt(2);
+    float m = 0.6;
+    tris[0] = grow_triangle({points2d[0], points2d[1], points2d[2]}, m*(float)max(tile_height, tile_width));
+    tris[1] = grow_triangle({points2d[0], points2d[1], points2d[3]}, m*(float)max(tile_height, tile_width));
+    tris[2] = grow_triangle({points2d[0], points2d[2], points2d[3]}, m*(float)max(tile_height, tile_width));
+    tris[3] = grow_triangle({points2d[1], points2d[2], points2d[3]}, m*(float)max(tile_height, tile_width));
+
+    // Polygon2D poly[4];
+    // poly[0] = grow_triangle_linf({points2d[0], points2d[1], points2d[2]}, m*(float)max(tile_height, tile_width));
+    // poly[1] = grow_triangle_linf({points2d[0], points2d[1], points2d[3]}, m*(float)max(tile_height, tile_width));
+    // poly[2] = grow_triangle_linf({points2d[0], points2d[2], points2d[3]}, m*(float)max(tile_height, tile_width));
+    // poly[3] = grow_triangle_linf({ points2d[1], points2d[2], points2d[3]}, m * (float)max(tile_height, tile_width));
+
+    bool contains_ray_origin = point_in_tetrahedron(tet, cam.position);
+
+    for (int32_t y = rect_min_y; y < rect_max_y; y++)
+    {
+        for (int32_t x = rect_min_x; x < rect_max_x; x++)
+        {
+            if (!contains_ray_origin) {
+                float2 pixel_center = {(x + 0.5f)*tile_width, (y + 0.5f)*tile_height};
+                bool contained = false;
+                for (int i = 0; i < 4; i++) {
+                    if (is_point_inside_triangle(pixel_center, tris[i])) {
+                    // if (in_polygon(pixel_center, poly[i])) {
+                        contained = true;
+                        break;
+                    }
+                }
+                if (!contained) continue;
+            }
+
+            uint64_t key = y * grid_width + x;
+            key <<= 32;
+            uint32_t fk = reinterpret<uint32_t>(abs(ndc_xyz.z));
+            key = key | fk;
+
+            out_unsorted_keys[offset] = key;
+            out_unsorted_gauss_idx[offset] = globalIdx;
+            offset++;
+        }
+    }
+    if (tiles_touched[globalIdx] < offset - start_offset) {
+        printf("%i vs %i, ", tiles_touched[globalIdx], offset - start_offset);
+    }
+}
 
 [AutoPyBindCUDA]
 [CUDAKernel]
