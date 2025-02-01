@@ -21,14 +21,15 @@ def render_alpha_blend_tiles_slang_raw(indices, vertices,
                              tile_height=tile_size,
                              tile_width=tile_size)
     st = time.time()
-    sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _ = vertex_and_tile_shader(indices,
-                                                                                 vertices,
-                                                                                 world_view_transform,
-                                                                                 K,
-                                                                                 cam_pos,
-                                                                                 fovy,
-                                                                                 fovx,
-                                                                                 render_grid)
+    sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _, tet_area = vertex_and_tile_shader(
+        indices,
+        vertices,
+        world_view_transform,
+        K,
+        cam_pos,
+        fovy,
+        fovx,
+        render_grid)
    
     # torch.cuda.synchronize()
     # ic("vt", time.time()-st)
@@ -72,6 +73,7 @@ def render_alpha_blend_tiles_slang_raw(indices, vertices,
         'visibility_filter': mask,
         'circumcenters': circumcenter,
         'rgbs': rgbs,
+        'tet_area': tet_area,
     }
 
     return render_pkg

@@ -186,9 +186,6 @@ void compute_tile_ranges(TensorView<int64_t> sorted_keys,
     else
     {
         uint32_t prevtile = uint32_t(uint64_t(sorted_keys[globalIdx - 1]) >> 32);
-        if (prevtile > currtile) {
-            printf("Strange things are about\n");
-        }
         if (currtile != prevtile)
         {
             out_tile_ranges[uint2(prevtile, 1)] = globalIdx;

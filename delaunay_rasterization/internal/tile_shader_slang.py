@@ -37,7 +37,7 @@ def vertex_and_tile_shader(indices,
       circumcenter: Tensor with the circumcenter of each tetrahedron in view-space [N, 3].
     """
     n_tetra = indices.shape[0]
-    tiles_touched, rect_tile_space, vs_tetra, circumcenter = VertexShader.apply(
+    tiles_touched, rect_tile_space, vs_tetra, circumcenter, tet_area = VertexShader.apply(
         indices, 
         vertices,
         densitites,
@@ -149,7 +149,7 @@ def vertex_and_tile_shader(indices,
         #     print("issue with tile ranges")
 
     mask = tiles_touched > 0
-    return sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, rect_tile_space
+    return sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, rect_tile_space, tet_area
 
 
 class VertexShader(torch.autograd.Function):
@@ -167,6 +167,9 @@ class VertexShader(torch.autograd.Function):
         rect_tile_space = torch.zeros((n_tetra, 4), 
                                       device="cuda", 
                                       dtype=torch.int32)
+        tet_area = torch.zeros((n_tetra), 
+                                device="cuda", 
+                                dtype=torch.float)
         
         vs_tetra = torch.zeros((n_tetra, 3),
                                device="cuda",
@@ -185,6 +188,7 @@ class VertexShader(torch.autograd.Function):
                                                   out_rect_tile_space=rect_tile_space,
                                                   out_vs=vs_tetra,
                                                   out_circumcenter=circumcenter,
+                                                  out_tet_area=tet_area,
                                                   fovy=fovy,
                                                   fovx=fovx,
                                                   image_height=render_grid.image_height,
@@ -203,7 +207,7 @@ class VertexShader(torch.autograd.Function):
         ctx.fovy = fovy
         ctx.fovx = fovx
 
-        return tiles_touched, rect_tile_space, vs_tetra, circumcenter
+        return tiles_touched, rect_tile_space, vs_tetra, circumcenter, tet_area
     
     @staticmethod
     def backward(ctx, grad_tiles_touched, grad_rect_tile_space, grad_vs_tetra, grad_circumcenter):

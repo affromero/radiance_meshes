@@ -7,6 +7,10 @@ class CustomAdam:
         self.optimizer = Adam(params, lr=lr, **kwargs)
         self.ignore_param_list = ignore_param_list if ignore_param_list is not None else []
 
+    @property
+    def param_groups(self):
+        return self.optimizer.param_groups
+
     def replace_tensor_to_optimizer(self, tensor, name):
         """
         Replace a tensor in the optimizer with a new tensor, maintaining its state if possible.

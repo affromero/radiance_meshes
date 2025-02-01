@@ -5,6 +5,7 @@ import utils;
 import spherical_harmonics;
 import intersect;
 import minkowski;
+import tet_area;
 
 struct rectangle {
     int32_t min_x;
@@ -138,6 +139,7 @@ void vertex_shader(TensorView<int32_t> indices,
                    TensorView<float> world_view_transform,
                    TensorView<float> K,
                    TensorView<float> cam_pos,
+                   TensorView<float> out_tet_area,
                    TensorView<int32_t> out_tiles_touched,
                    TensorView<int32_t> out_rect_tile_space,
                    DiffTensorView out_vs,
@@ -204,6 +206,13 @@ void vertex_shader(TensorView<int32_t> indices,
     out_rect_tile_space[uint2(g_idx, 1)] = rect_tile_space.min_y;
     out_rect_tile_space[uint2(g_idx, 2)] = rect_tile_space.max_x;
     out_rect_tile_space[uint2(g_idx, 3)] = rect_tile_space.max_y;
+
+    float3 view_dir = { cam.world_view_transform._31, cam.world_view_transform._32, cam.world_view_transform._33 };
+    if (contains_ray_origin) {
+        out_tet_area[g_idx] = cam.H * cam.W;
+    } else {
+        out_tet_area[g_idx] = no_diff tet_area(camspace_tet2image_w_depth(camspace_tet, cam), view_dir, cam);
+    }
 
     float3 circumcenter = calculate_circumcenter(tet);
     float radius = length(circumcenter - tet.verts[0]);
