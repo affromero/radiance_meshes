@@ -1,8 +1,8 @@
 import os
-VERSION = 9
-if VERSION is not None:
-    os.environ["CC"] = f"/usr/bin/gcc-{VERSION}"
-    os.environ["CXX"] = f"/usr/bin/g++-{VERSION}"
+# VERSION = 9
+# if VERSION is not None:
+#     os.environ["CC"] = f"/usr/bin/gcc-{VERSION}"
+#     os.environ["CXX"] = f"/usr/bin/g++-{VERSION}"
 from pathlib import Path
 import sys
 sys.path.append(str(Path(os.path.abspath('')).parent))
@@ -34,7 +34,7 @@ from fused_ssim import fused_ssim
 from utils.loss_utils import ssim
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
-    "/optane/nerf_datasets/360/bicycle", "images_4", data_device="cuda", eval=True)
+    "/data/nerf_datasets/360/bicycle", "images_4", data_device="cuda", eval=True)
 
 
 sh_deg = 3
@@ -107,7 +107,7 @@ args.budget = 500_000
 args.num_densification_samples = 50
 args.num_densify_iter = 2500
 args.densify_start = 1500
-args.num_iter = 100#args.densify_start + args.num_densify_iter + 1500
+args.num_iter = 10#args.densify_start + args.num_densify_iter + 1500
 args.sh_degree_interval = 500
 
 def target_num(x):
@@ -274,9 +274,9 @@ for train_ind in progress_bar:
         model.update_triangulation()
         # print(f'update: {(time.time()-st)}')
 
-avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
-plt.plot(range(len(avged_psnrs)), avged_psnrs)
-plt.show()
+# avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
+# plt.plot(range(len(avged_psnrs)), avged_psnrs)
+# plt.show()
 mediapy.write_video("training.mp4", images)
 
 torch.cuda.synchronize()

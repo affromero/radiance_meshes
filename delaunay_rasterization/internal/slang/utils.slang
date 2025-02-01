@@ -623,20 +623,6 @@ Ray get_ray(Camera cam, float2 center_pix_coord) {
     return ray;
 }
 
-void printTetrahedra(const Tetrahedra t) {
-    printf(
-        "tet = np.array([\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f]])\n",
-        t.verts[0].x, t.verts[0].y, t.verts[0].z,
-        t.verts[1].x, t.verts[1].y, t.verts[1].z,
-        t.verts[2].x, t.verts[2].y, t.verts[2].z,
-        t.verts[3].x, t.verts[3].y, t.verts[3].z
-    );
-}
-
 bool is_point_inside_triangle(float2 p, Triangle2D tri) {
     // Compute barycentric coordinates
     float2 v0 = tri.b - tri.a;

@@ -1,15 +1,15 @@
 import safe_math;
 
 // Spherical harmonics coefficients
-static const half SH_C0 = 0.28209479177387814f;
-static const half SH_C1 = 0.4886025119029199f;
-static const half SH_C2[] = {
-  1.0925484305920792f, -1.0925484305920792f, 0.31539156525252005f, -1.0925484305920792f,
-  0.5462742152960396f
+static const half hSH_C0 = 0.28209479177387814h;
+static const half hSH_C1 = 0.4886025119029199h;
+static const half hSH_C2[] = {
+  1.0925484305920792h, -1.0925484305920792h, 0.31539156525252005h, -1.0925484305920792h,
+  0.5462742152960396h
 };
-static const half SH_C3[] = {
-  -0.5900435899266435f, 2.890611442640554f, -0.4570457994644658f, 0.3731763325901154f,
-  -0.4570457994644658f, 1.445305721320277f, -0.5900435899266435f
+static const half hSH_C3[] = {
+  -0.5900435899266435h, 2.890611442640554h, -0.4570457994644658h, 0.3731763325901154h,
+  -0.4570457994644658h, 1.445305721320277h, -0.5900435899266435h
 };
 
 struct HalfSHFeatures {
@@ -33,7 +33,7 @@ struct HalfFeatures : IDifferentiable {
 
 [Differentiable]
 half3 half_eval_sh_col0(half3 dir, HalfFeatures feat) {
-  return SH_C0 * feat.f0 + 0.5f;
+  return hSH_C0 * feat.f0 + 0.5h;
 }
 
 [Differentiable]
@@ -42,7 +42,7 @@ half3 half_eval_sh_col1(half3 dir, HalfFeatures feat) {
   half y = dir.y;
   half z = dir.z;
   //printf("Feat 1,2,3: (%f, %f, %f), %f, %f\n", feat.f1.x, feat.f1.y, feat.f1.z, feat.f2.x, feat.f3.x);
-  half3 color = -SH_C1 * y * feat.f1 + SH_C1 * z * feat.f2 - SH_C1 * x * feat.f3;
+  half3 color = -hSH_C1 * y * feat.f1 + hSH_C1 * z * feat.f2 - hSH_C1 * x * feat.f3;
   return color;
 }
 
@@ -53,9 +53,9 @@ half3 half_eval_sh_col2(half3 dir, HalfFeatures feat) {
   half z = dir.z;
   half xx = x * x, yy = y * y, zz = z * z;
   half xy = x * y, yz = y * z, xz = x * z;
-  return SH_C2[0] * xy * feat.f4 + SH_C2[1] * yz * feat.f5 +
-         SH_C2[2] * (2.0f * zz - xx - yy) * feat.f6 +
-         SH_C2[3] * xz * feat.f7 + SH_C2[4] * (xx - yy) * feat.f8;
+  return hSH_C2[0] * xy * feat.f4 + hSH_C2[1] * yz * feat.f5 +
+         hSH_C2[2] * (2.0f * zz - xx - yy) * feat.f6 +
+         hSH_C2[3] * xz * feat.f7 + hSH_C2[4] * (xx - yy) * feat.f8;
 }
 
 [Differentiable]
@@ -65,13 +65,13 @@ half3 half_eval_sh_col3(half3 dir, HalfFeatures feat) {
   half z = dir.z;
   half xx = x * x, yy = y * y, zz = z * z;
   half xy = x * y, yz = y * z, xz = x * z;
-  return SH_C3[0] * y * (3.0f * xx - yy) * feat.f9 +
-         SH_C3[1] * xy * z * feat.f10 +
-         SH_C3[2] * y * (4.0f * zz - xx - yy) * feat.f11 +
-         SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * feat.f12 +
-         SH_C3[4] * x * (4.0f * zz - xx - yy) * feat.f13 +
-         SH_C3[5] * z * (xx - yy) * feat.f14 +
-         SH_C3[6] * x * (xx - 3.0f * yy) * feat.f15;
+  return hSH_C3[0] * y * (3.0f * xx - yy) * feat.f9 +
+         hSH_C3[1] * xy * z * feat.f10 +
+         hSH_C3[2] * y * (4.0f * zz - xx - yy) * feat.f11 +
+         hSH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * feat.f12 +
+         hSH_C3[4] * x * (4.0f * zz - xx - yy) * feat.f13 +
+         hSH_C3[5] * z * (xx - yy) * feat.f14 +
+         hSH_C3[6] * x * (xx - 3.0f * yy) * feat.f15;
 }
 
 [Differentiable]
