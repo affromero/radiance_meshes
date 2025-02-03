@@ -183,12 +183,14 @@ float3 point2camspace(float3 point, Camera cam) {
     return cam_space_nohomo;
 }
 
+[Differentiable]
 float3 camspace2image_w_depth(float3 cam_space_nohomo, Camera cam) {
     float3 pix_space = mul(cam.K, float3(safe_div(cam_space_nohomo.xy, abs(cam_space_nohomo.z) + eps), 1.f));
     pix_space.z = cam_space_nohomo.z;
     return pix_space;
 }
 
+[Differentiable]
 float2 point2image(float3 point, Camera cam) {
     float4 cam_space_homo = mul(cam.world_view_transform, float4(point, 1.f));
     float3 cam_space_nohomo = safe_div(cam_space_homo.xyz, cam_space_homo.w);
@@ -291,6 +293,18 @@ Tetrahedra project_tetrahedra(Tetrahedra tet, Camera cam) {
             project_point_w_depth(tet.verts[1], cam),
             project_point_w_depth(tet.verts[2], cam),
             project_point_w_depth(tet.verts[3], cam)
+        }
+    };
+}
+
+[Differentiable]
+Tetrahedra camspace_tet2image_w_depth(Tetrahedra camspace_tet, Camera cam) {
+    return {
+        {
+            camspace2image_w_depth(camspace_tet.verts[0], cam),
+            camspace2image_w_depth(camspace_tet.verts[1], cam),
+            camspace2image_w_depth(camspace_tet.verts[2], cam),
+            camspace2image_w_depth(camspace_tet.verts[3], cam)
         }
     };
 }
@@ -504,20 +518,21 @@ float3 calculate_circumcenter(Tetrahedra tet)
     return tet.verts[0] + relative_circumcenter;
 }
 
-// [Differentiable]
-// SplatTetrahedra load_tet_alphablend(int32_t g_idx,
-//                                     DiffTensorView vertices,
-//                                     TensorView<int32_t> indices,
-//                                     DiffTensorView rgbs)
-// {
-//     uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
-//     Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
-//     return {
-//         tet,
-//         read_t4_float4(g_idx, rgbs)
-//     };
-// }
+[Differentiable]
+SplatTetrahedra load_tet_alphablend(int32_t g_idx,
+                                    DiffTensorView vertices,
+                                    TensorView<int32_t> indices,
+                                    DiffTensorView rgbs)
+{
+    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
+    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+    return {
+        tet,
+        read_t4_float4(g_idx, rgbs)
+    };
+}
 
+/*
 [Differentiable]
 SplatTetrahedra load_tet_alphablend(int32_t g_idx,
                                     DiffTensorView tet_vertices,
@@ -537,6 +552,7 @@ SplatTetrahedra load_tet_alphablend(int32_t g_idx,
         read_t4_float4(g_idx, rgbs)
     };
 }
+*/
 
 // [Differentiable]
 // SplatTetrahedra load_tet_alphablend(int32_t g_idx,

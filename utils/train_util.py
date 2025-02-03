@@ -7,8 +7,7 @@ from sh_slang.eval_sh import eval_sh
 from delaunay_rasterization.internal.alphablend_tiled_slang import AlphaBlendTiledRender, render_alpha_blend_tiles_slang_raw
 from delaunay_rasterization.internal.render_grid import RenderGrid
 from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader
-from gDel3D.build.gdel3d import Del
-from icecream import ic
+import numpy as np
 
 def sample_uniform_in_sphere(batch_size, dim, radius=1.0, device=None):
     """
@@ -126,7 +125,7 @@ def safe_sin(x):
     return safe_trig_helper(x, torch.sin)
 
 
-def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
+def render(camera: Camera, model, register_tet_hook=False, tile_size=16):
     fy = fov2focal(camera.fovy, camera.image_height)
     fx = fov2focal(camera.fovx, camera.image_width)
     K = torch.tensor([
@@ -154,9 +153,13 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
                              camera.image_width,
                              tile_height=tile_size,
                              tile_width=tile_size)
-    st = time.time()
-    sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _ = vertex_and_tile_shader(
+    # with torch.no_grad():
+    #     sensitivity = topo_utils.compute_vertex_sensitivity(model.indices, model.vertices)
+    #     scaling = 1/(sensitivity.reshape(-1, 1)+1e-5)
+    # scale_vertices = train_util.ScaleGradients.apply(model.vertices, scaling)
+    sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _, tet_area = vertex_and_tile_shader(
         model.indices,
+        # scale_vertices,
         model.vertices,
         model.vertices,
         world_view_transform,
@@ -186,7 +189,8 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
         sorted_tetra_idx,
         tile_ranges,
         model.indices,
-        tet_vertices,
+        # tet_vertices,
+        model.vertices,
         cell_values,
         render_grid,
         world_view_transform,
@@ -204,5 +208,41 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=4):
         'visibility_filter': mask,
         'circumcenters': circumcenter,
         'tet_grad': tet_grads,
+        'tet_area': tet_area,
     }
     return render_pkg
+
+def get_expon_lr_func(
+    lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
+):
+    """
+    Copied from Plenoxels
+
+    Continuous learning rate decay function. Adapted from JaxNeRF
+    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
+    is log-linearly interpolated elsewhere (equivalent to exponential decay).
+    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
+    function of lr_delay_mult, such that the initial learning rate is
+    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
+    to the normal learning rate when steps>lr_delay_steps.
+    :param conf: config subtree 'lr' or similar
+    :param max_steps: int, the number of steps during optimization.
+    :return HoF which takes step as input
+    """
+
+    def helper(step):
+        if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
+            # Disable this parameter
+            return 0.0
+        if lr_delay_steps > 0:
+            # A kind of reverse cosine decay.
+            delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
+                0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
+            )
+        else:
+            delay_rate = 1.0
+        t = np.clip(step / max_steps, 0, 1)
+        log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+        return delay_rate * log_lerp
+
+    return helper

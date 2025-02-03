@@ -10,7 +10,11 @@ from sh_slang.eval_sh import eval_sh
 from gDel3D.build.gdel3d import Del
 from torch import nn
 from icecream import ic
-from utils.train_util import RGB2SH, safe_exp
+from utils.train_util import RGB2SH, safe_exp, get_expon_lr_func
+import numpy as np
+import os
+from plyfile import PlyData, PlyElement
+from pathlib import Path
 
 class Model:
     def __init__(self,
@@ -28,6 +32,59 @@ class Model:
         self.sh_deg = sh_deg
         self.update_triangulation()
         self.device = vertices.device
+
+    def save2ply(self, path: Path):
+        path.parent.mkdir(exist_ok=True, parents=True)
+        
+        xyz = self.vertices.detach().cpu().numpy()
+        s_param = self.vertex_s_param.detach().cpu().numpy()
+        rgb_param = self.vertex_rgb_param.detach().cpu().numpy()
+        sh_param = self.vertex_sh_param.detach().cpu().numpy()
+
+        dtype_full = [('x', 'f4'), ('y', 'f4'), ('z', 'f4')]
+        dtype_full += [(f's_param_{i}', 'f4') for i in range(s_param.shape[1])]
+        dtype_full += [(f'rgb_{i}', 'f4') for i in range(rgb_param.shape[1])]
+        dtype_full += [(f'sh_{i}', 'f4') for i in range(sh_param.shape[1])]
+        
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, s_param, rgb_param, sh_param), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(str(path))
+
+    @staticmethod
+    def load_ply(path, device):
+        plydata = PlyData.read(path)
+
+        xyz = np.stack((np.asarray(plydata.elements[0]['x']),
+                        np.asarray(plydata.elements[0]['y']),
+                        np.asarray(plydata.elements[0]['z'])), axis=1)
+        
+        s_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("s_param_")]
+        s_names = sorted(s_names, key=lambda x: int(x.split('_')[-1]))
+        s_param = np.stack([np.asarray(plydata.elements[0][name]) for name in s_names], axis=1)
+        
+        rgb_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rgb_")]
+        rgb_names = sorted(rgb_names, key=lambda x: int(x.split('_')[-1]))
+        rgb_param = np.stack([np.asarray(plydata.elements[0][name]) for name in rgb_names], axis=1)
+        
+        sh_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("sh_")]
+        sh_names = sorted(sh_names, key=lambda x: int(x.split('_')[-1]))
+        sh_param = np.stack([np.asarray(plydata.elements[0][name]) for name in sh_names], axis=1)
+        
+        vertices = torch.tensor(xyz, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_s_param = torch.tensor(s_param, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_rgb_param = torch.tensor(rgb_param, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_sh_param = torch.tensor(sh_param, dtype=torch.float, device=device).requires_grad_(True)
+
+        sh_deg = int(math.sqrt(sh_param.shape[1] // 3 + 1)) - 1
+
+        vertices = nn.Parameter(vertices)
+        vertex_s_param = nn.Parameter(vertex_s_param)
+        vertex_rgb_param = nn.Parameter(vertex_rgb_param)
+        vertex_sh_param = nn.Parameter(vertex_sh_param)
+        model = Model(vertices, vertex_s_param, vertex_rgb_param, vertex_sh_param, sh_deg, sh_deg)
+        return model
 
     @staticmethod
     def init_from_pcd(point_cloud, cameras, sh_deg, device):
@@ -91,7 +148,13 @@ class Model:
             features = features[self.indices[mask].reshape(-1)]
         else:
             features = features[self.indices.reshape(-1)]
-        features = features.reshape(-1, 4, 4).sum(dim=1) / 4
+        features = features.reshape(-1, 4, 4)
+        # density = features[:, :, 3:4].sum(dim=1)
+        # color = (features[:, :, :3] * features[:, :, 3:4]).sum(dim=1) / (density+1e-8)
+        # features = torch.cat([color, density], dim=1)
+        # features = features[:, features[:, :, 3].min(dim=1).indices]
+        features = features.sum(dim=1) / 4
+        # features = features.min(dim=1).values
         return features
 
     def __len__(self):
@@ -107,7 +170,10 @@ class TetOptimizer:
                  s_param_lr: float=0.025,
                  rgb_param_lr: float=0.025,
                  sh_param_lr: float=0.00025,
-                 vertices_lr: float=4e-4):
+                 vertices_lr: float=4e-4,
+                 final_vertices_lr: float=4e-7,
+                 vertices_lr_delay_mult: float=0.01,
+                 vertices_lr_max_steps: int=5000):
         self.optim = optim.CustomAdam([
             # {"params": net.parameters(), "lr": 1e-3},
             {"params": [model.vertex_s_param], "lr": s_param_lr, "name": "vertex_s_param"},
@@ -123,6 +189,18 @@ class TetOptimizer:
         self.tracker_n = 0
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
+
+        self.vertex_scheduler_args = get_expon_lr_func(lr_init=vertices_lr,
+                                                lr_final=final_vertices_lr,
+                                                lr_delay_mult=vertices_lr_delay_mult,
+                                                max_steps=vertices_lr_max_steps)
+
+    def update_learning_rate(self, iteration):
+        ''' Learning rate scheduling per step '''
+        for param_group in self.vertex_optim.param_groups:
+            if param_group["name"] == "vertices":
+                lr = self.vertex_scheduler_args(iteration)
+                param_group['lr'] = lr
 
     def update_ema(self):
         pass
@@ -182,6 +260,7 @@ class TetOptimizer:
             return grads.abs().sum(dim=-1), vgrads.abs().sum(dim=-1)
         else:
             return torch.zeros((len(self.model)), dtype=bool, device=self.model.device), torch.zeros((len(self.model)), dtype=bool, device=self.model.device)
+
 
     def reset_tracker(self):
         self.tracker_n = 0

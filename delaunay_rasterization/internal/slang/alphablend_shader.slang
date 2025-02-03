@@ -66,9 +66,6 @@ float4 alpha_blend(TensorView<int32_t> sorted_gauss_idx,
     bool thread_active = is_inside;
 
     const int shared_memory_rounds = ((tile_idx_end - tile_idx_start) + block_size - 1) / block_size;
-    if (shared_memory_rounds > 10000) {
-        printf("%i,", shared_memory_rounds);
-    }
     uint32_t thread_rank = cudaThreadIdx().y * cudaBlockDim().x + cudaThreadIdx().x;
     //bool print = thread_rank == 0;
     bool print = false;
