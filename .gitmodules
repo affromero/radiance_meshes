@@ -1,15 +1,6 @@
-[submodule "dtet/pybind11"]
-	path = dtet/pybind11
-	url = https://github.com/pybind/pybind11.git
-[submodule "dtet/cgal"]
-	path = dtet/cgal
-	url = https://github.com/CGAL/cgal.git
-[submodule "dtet/NumCpp"]
-	path = dtet/NumCpp
-	url = https://github.com/dpilger26/NumCpp.git
 [submodule "gDel3D"]
 	path = gDel3D
-	url = https://github.com/half-potato/pyGDel3D
+	url = git@github.com:half-potato/pyGDel3D.git
 [submodule "submodules/fused-ssim"]
 	path = submodules/fused-ssim
 	url = https://github.com/rahul-goel/fused-ssim

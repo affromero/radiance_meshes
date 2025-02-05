@@ -69,6 +69,40 @@ class Model:
         PlyData([el]).write(str(path))
 
     @staticmethod
+    def load_ply(path, device):
+        plydata = PlyData.read(path)
+
+        xyz = np.stack((np.asarray(plydata.elements[0]['x']),
+                        np.asarray(plydata.elements[0]['y']),
+                        np.asarray(plydata.elements[0]['z'])), axis=1)
+        
+        s_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("s_param_")]
+        s_names = sorted(s_names, key=lambda x: int(x.split('_')[-1]))
+        s_param = np.stack([np.asarray(plydata.elements[0][name]) for name in s_names], axis=1)
+        
+        rgb_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rgb_")]
+        rgb_names = sorted(rgb_names, key=lambda x: int(x.split('_')[-1]))
+        rgb_param = np.stack([np.asarray(plydata.elements[0][name]) for name in rgb_names], axis=1)
+        
+        sh_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("sh_")]
+        sh_names = sorted(sh_names, key=lambda x: int(x.split('_')[-1]))
+        sh_param = np.stack([np.asarray(plydata.elements[0][name]) for name in sh_names], axis=1)
+        
+        vertices = torch.tensor(xyz, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_s_param = torch.tensor(s_param, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_rgb_param = torch.tensor(rgb_param, dtype=torch.float, device=device).requires_grad_(True)
+        vertex_sh_param = torch.tensor(sh_param, dtype=torch.float, device=device).requires_grad_(True)
+
+        sh_deg = int(math.sqrt(sh_param.shape[1] // 3 + 1)) - 1
+
+        vertices = nn.Parameter(vertices)
+        vertex_s_param = nn.Parameter(vertex_s_param)
+        vertex_rgb_param = nn.Parameter(vertex_rgb_param)
+        vertex_sh_param = nn.Parameter(vertex_sh_param)
+        model = Model(vertices, vertex_s_param, vertex_rgb_param, vertex_sh_param, sh_deg, sh_deg)
+        return model
+
+    @staticmethod
     def init_from_pcd(point_cloud, cameras, device, sh_deg, **kwargs):
         dim = 1 + 3*(sh_deg+1)**2
         torch.manual_seed(2)

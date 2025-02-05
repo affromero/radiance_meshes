@@ -60,3 +60,6 @@ htmlcov/
 *.tmp
 *~
 output/*
+nv_profiles/*
+*.pkl
+*.ply

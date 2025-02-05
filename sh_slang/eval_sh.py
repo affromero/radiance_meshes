@@ -22,7 +22,7 @@ from torch.autograd import Function
 from icecream import ic
 
 kernels = slangtorch.loadModule(
-    str(Path(__file__).parent / "slang/sh_kernel.slang")
+    str(Path(__file__).parent / "slang/sh_kernel.slang"),
 )
 
 class EvalSH(Function):

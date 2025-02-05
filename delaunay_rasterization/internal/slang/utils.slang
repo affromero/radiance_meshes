@@ -518,20 +518,21 @@ float3 calculate_circumcenter(Tetrahedra tet)
     return tet.verts[0] + relative_circumcenter;
 }
 
-// [Differentiable]
-// SplatTetrahedra load_tet_alphablend(int32_t g_idx,
-//                                     DiffTensorView vertices,
-//                                     TensorView<int32_t> indices,
-//                                     DiffTensorView rgbs)
-// {
-//     uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
-//     Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
-//     return {
-//         tet,
-//         read_t4_float4(g_idx, rgbs)
-//     };
-// }
+[Differentiable]
+SplatTetrahedra load_tet_alphablend(int32_t g_idx,
+                                    DiffTensorView vertices,
+                                    TensorView<int32_t> indices,
+                                    DiffTensorView rgbs)
+{
+    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
+    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+    return {
+        tet,
+        read_t4_float4(g_idx, rgbs)
+    };
+}
 
+/*
 [Differentiable]
 SplatTetrahedra load_tet_alphablend(int32_t g_idx,
                                     DiffTensorView tet_vertices,
@@ -551,6 +552,7 @@ SplatTetrahedra load_tet_alphablend(int32_t g_idx,
         read_t4_float4(g_idx, rgbs)
     };
 }
+*/
 
 // [Differentiable]
 // SplatTetrahedra load_tet_alphablend(int32_t g_idx,
@@ -635,20 +637,6 @@ Ray get_ray(Camera cam, float2 center_pix_coord, float min_t) {
     
     ray.o = cam.position + ray.d * min_t;
     return ray;
-}
-
-void printTetrahedra(const Tetrahedra t) {
-    printf(
-        "tet = np.array([\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f],\n"
-        "  [%f, %f, %f]])\n",
-        t.verts[0].x, t.verts[0].y, t.verts[0].z,
-        t.verts[1].x, t.verts[1].y, t.verts[1].z,
-        t.verts[2].x, t.verts[2].y, t.verts[2].z,
-        t.verts[3].x, t.verts[3].y, t.verts[3].z
-    );
 }
 
 bool is_point_inside_triangle(float2 p, Triangle2D tri) {

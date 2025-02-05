@@ -1,8 +1,8 @@
 import os
-VERSION = 9
-if VERSION is not None:
-    os.environ["CC"] = f"/usr/bin/gcc-{VERSION}"
-    os.environ["CXX"] = f"/usr/bin/g++-{VERSION}"
+# VERSION = 9
+# if VERSION is not None:
+#     os.environ["CC"] = f"/usr/bin/gcc-{VERSION}"
+#     os.environ["CXX"] = f"/usr/bin/g++-{VERSION}"
 from pathlib import Path
 import sys
 sys.path.append(str(Path(os.path.abspath('')).parent))
@@ -23,7 +23,11 @@ from utils.train_util import *
 from models.ingp_color import Model, TetOptimizer
 from fused_ssim import fused_ssim
 from pathlib import Path
+<<<<<<< HEAD
 from utils.args import Args
+=======
+import pickle
+>>>>>>> 466bedbc5546cb1db65bcc6ffd8fe28adb08a93c
 
 args = Args()
 args.tile_size = 16
@@ -64,6 +68,8 @@ args.output_path.mkdir(exist_ok=True, parents=True)
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device="cuda", eval=args.eval)
 
+with open('camera.pkl', 'wb') as f:
+    pickle.dump(test_cameras[0], f)
 
 camera = train_cameras[0]
 
@@ -74,7 +80,6 @@ tet_optim = TetOptimizer(model, **args.as_dict())
 images = []
 psnrs = [[]]
 inds = []
-
 # def target_num(x):
 #     S = model.vertices.shape[0]
 #     N = args.num_densify_iter // args.cloning_interval
