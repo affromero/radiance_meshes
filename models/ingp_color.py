@@ -17,9 +17,10 @@ from utils.safe_math import safe_exp, safe_div, safe_sqrt
 from utils.contraction import contract_mean_std
 from torch_ema import ExponentialMovingAverage
 from utils.contraction import contract_points, inv_contract_points
-from utils.train_util import RGB2SH, safe_exp, get_expon_lr_func
+from utils.train_util import RGB2SH, safe_exp, get_expon_lr_func, sample_uniform_in_sphere
 from utils import topo_utils
 from utils.graphics_utils import l2_normalize_th
+from typing import List
 
 def next_multiple(value, multiple):
     """Round `value` up to the nearest multiple of `multiple`."""
@@ -147,11 +148,12 @@ class Model:
             activation="ReLU",
             output_activation="None",
             n_neurons=64,
-            n_hidden_layers=2,
+            n_hidden_layers=1,
         ))
         offsets, pred_total = compute_grid_offsets(config, 3)
         total = list(self.encoding.parameters())[0].shape[0]
-        assert total == pred_total, f"Pred #params: {pred_total} vs {total}"
+        ic(offsets, pred_total, total)
+        # assert total == pred_total, f"Pred #params: {pred_total} vs {total}"
         resolution = grid_scale(L-1, per_level_scale, base_resolution)
         ic(resolution)
         self.different_size = 0
@@ -165,7 +167,7 @@ class Model:
 
         self.center = center.reshape(1, 3)
         self.scene_scaling = scene_scaling
-        self.contracted_vertices = nn.Parameter(contract_points((vertices.detach() - self.center) / scene_scaling))
+        self.contracted_vertices = nn.Parameter(self.contract(vertices.detach()))
         self.update_triangulation()
 
 
@@ -180,30 +182,40 @@ class Model:
         return self.inv_contract(self.contracted_vertices)
 
     @staticmethod
-    def init_from_pcd(point_cloud, cameras, device, **kwargs):
+    def init_from_pcd(point_cloud, cameras, device, additional_pts=20000, **kwargs):
         torch.manual_seed(2)
         N = point_cloud.points.shape[0]
         # N = 1000
         vertices = torch.as_tensor(point_cloud.points)[:N]
         minv = vertices.min(dim=0, keepdim=True).values
         maxv = vertices.max(dim=0, keepdim=True).values
-        N = 20000
         vertices = torch.cat([
           vertices.reshape(-1, 3),
-          (torch.rand((N, 3)) * (maxv - minv) + minv) * 2
+          (torch.rand((additional_pts, 3)) * (maxv - minv) + minv) * 2
         ], dim=0)
 
         ccenters = torch.stack([c.camera_center.reshape(3) for c in cameras], dim=0)
         minv = ccenters.min(dim=0, keepdim=True).values
         maxv = ccenters.max(dim=0, keepdim=True).values
-        center = (minv + (maxv-minv)/2).to(device)
-        scaling = (maxv-minv).max().to(device)
-        repeats = 3
-        vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
-        vertices = vertices + torch.randn(*vertices.shape) * 1e-1
-        vertices = vertices.reshape(-1, 3)
+        # center = (minv + (maxv-minv)/2).to(device)
+        # scaling1 = (maxv-minv).max().to(device)
+        center = ccenters.mean(dim=0)
+        scaling = torch.linalg.norm(ccenters - center.reshape(1, 3), dim=1, ord=torch.inf).max()
+        # ic(center1, center, scaling1, scaling)
+
+        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
+        v = Del(vertices.shape[0])
+        indices_np, prev = v.compute(vertices.detach().cpu())
+        indices_np = indices_np.numpy()
+        indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
+        vertices = vertices[indices_np].mean(dim=1)
+
+        # repeats = 3
+        # vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
+        # vertices = vertices + torch.randn(*vertices.shape) * 1e-1
+        # vertices = vertices.reshape(-1, 3)
+
         vertices = nn.Parameter(vertices.cuda())
-        # vertex_sh_param = torch.zeros((vertices.shape[0], 3*(sh_deg+1)**2 - 3), device=device)
         model = Model(vertices, center, scaling, **kwargs)
         return model
 
@@ -214,8 +226,8 @@ class Model:
         v = Del(self.vertices.shape[0])
         indices_np, prev = v.compute(self.vertices.detach().cpu())
         indices_np = indices_np.numpy()
-        self.indices_np = indices_np[(indices_np < self.vertices.shape[0]).all(axis=1)]
-        self.indices = torch.as_tensor(self.indices_np).cuda()
+        indices_np = indices_np[(indices_np < self.vertices.shape[0]).all(axis=1)]
+        self.indices = torch.as_tensor(indices_np).cuda()
         
     def get_cell_values(self, camera: Camera, mask=None):
         indices = self.indices[mask] if mask is not None else self.indices
@@ -227,35 +239,18 @@ class Model:
         cr = cr * self.scale_multi
         n = torch.arange(self.L, device=self.device).reshape(1, 1, -1)
         erf_x = safe_div(torch.tensor(1.0, device=self.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
-        # cv, cr = normalized, radius
-        # ic(cv, normalized, new_vertex_location, self.scene_scaling)
-        # ic(normalized, normalized.max(), normalized.min(), self.center, self.scene_scaling)
+
         output = self.encoding((cv + 1)/2).float()
         output = output.reshape(-1, self.dim, self.L)
         scaling = torch.erf(erf_x)
         output = output * scaling
-        output = output.sum(dim=1)
-        # output = self.network(output.reshape(-1, self.L * self.dim)).float()
+        output = self.network(output.reshape(-1, self.L * self.dim)).float()
+
+        # output = output.sum(dim=1)
         # directions = l2_normalize_th(self.vertices - camera.camera_center.reshape(1, 3))
         features = torch.cat([
             torch.nn.functional.softplus(output[:, :3]), safe_exp(output[:, 3:4]-2)], dim=1)
-        # ic(p.max(), p.min(), features[:, 3].max(), features.min(), features.max())
-        # ic(scaling, features[:, 3:4])
         return features
-
-    def regularizer(self):
-        # split params
-        param = list(self.encoding.parameters())[0]
-        weight_decay = 0
-        ind = 0
-        for i in range(self.different_size):
-            o = self.offsets[i+1] - self.offsets[i]
-            weight_decay = weight_decay + (param[ind:self.offsets[i+1]]**2).mean()
-            ind += o
-        weight_decay = weight_decay + (param[ind:].reshape(-1, self.nominal_offset_size)**2).mean(dim=1).sum()
-        
-        l2_reg = 1e-6 * torch.linalg.norm(list(self.encoding.parameters())[0], ord=2)
-        return 0.01 * weight_decay + l2_reg
 
     def __len__(self):
         return self.vertices.shape[0]
@@ -265,20 +260,26 @@ class TetOptimizer:
     def __init__(self,
                  model: Model,
                  encoding_lr: float=1e-2,
+                 final_encoding_lr: float=1e-2,
                  network_lr: float=1e-3,
+                 final_network_lr: float=1e-3,
                  vertices_lr: float=4e-4,
                  final_vertices_lr: float=4e-7,
                  vertices_lr_delay_mult: float=0.01,
                  vertices_lr_max_steps: int=5000,
+                 weight_decay=1e-10,
+                 net_weight_decay=1e-3,
                  split_std: float = 0.1,
+                 vertices_beta: List[float] = [0.9, 0.99],
                  **kwargs):
+        self.weight_decay = weight_decay
         self.optim = optim.CustomAdam([
             # {"params": net.parameters(), "lr": 1e-3},
             {"params": model.encoding.parameters(), "lr": encoding_lr, "name": "encoding"},
-        ], ignore_param_list=["encoding", "network"], eps=1e-15, betas=[0.9, 0.99])
+        ], ignore_param_list=["encoding", "network"], eps=1e-15, betas=vertices_beta)
         self.net_optim = optim.CustomAdam([
             {"params": model.network.parameters(), "lr": network_lr, "name": "network"},
-        ], ignore_param_list=["encoding", "network"])
+        ], ignore_param_list=["encoding", "network"], weight_decay=net_weight_decay)
         self.vertex_optim = optim.CustomAdam([
             {"params": [model.contracted_vertices], "lr": vertices_lr, "name": "contracted_vertices"},
         ])
@@ -289,6 +290,14 @@ class TetOptimizer:
         self.vertex_grad = None
         self.split_std = split_std
 
+        self.net_scheduler_args = get_expon_lr_func(lr_init=network_lr,
+                                                lr_final=final_network_lr,
+                                                lr_delay_mult=vertices_lr_delay_mult,
+                                                max_steps=vertices_lr_max_steps)
+        self.encoder_scheduler_args = get_expon_lr_func(lr_init=encoding_lr,
+                                                lr_final=final_encoding_lr,
+                                                lr_delay_mult=vertices_lr_delay_mult,
+                                                max_steps=vertices_lr_max_steps)
         self.vertex_scheduler_args = get_expon_lr_func(lr_init=vertices_lr,
                                                 lr_final=final_vertices_lr,
                                                 lr_delay_mult=vertices_lr_delay_mult,
@@ -296,6 +305,14 @@ class TetOptimizer:
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
+        for param_group in self.net_optim.param_groups:
+            if param_group["name"] == "network":
+                lr = self.net_scheduler_args(iteration)
+                param_group['lr'] = lr
+        for param_group in self.optim.param_groups:
+            if param_group["name"] == "encoding":
+                lr = self.encoder_scheduler_args(iteration)
+                param_group['lr'] = lr
         for param_group in self.vertex_optim.param_groups:
             if param_group["name"] == "contracted_vertices":
                 lr = self.vertex_scheduler_args(iteration)
@@ -316,21 +333,29 @@ class TetOptimizer:
         self.model.update_triangulation()
 
     @torch.no_grad()
-    def split(self, clone_indices):
-        barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=self.model.device).clip(min=0.01, max=0.99)
-        barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
-
+    def split(self, clone_indices, split_mode):
+        device = self.model.device
         clone_vertices = self.model.vertices[clone_indices]
+        # barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=self.model.device).clip(min=0.01, max=0.99)
+        # barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
+        # raw_new_vertex_location = (clone_vertices * barycentric_weights).sum(dim=1)
 
-        circumcenters, radius = topo_utils.calculate_circumcenters_torch(clone_vertices)
-        radius = radius.reshape(-1, 1)
-        circumcenters = circumcenters.reshape(-1, 3)
-
-        raw_new_vertex_location = (clone_vertices * barycentric_weights).sum(dim=1)
-        r = torch.randn((clone_indices.shape[0], 1), device=self.model.device)
-        r[r.abs() < 1e-2] = 1e-2
-        sampled_radius = (r * self.split_std + 1) * radius
-        new_vertex_location = l2_normalize_th(raw_new_vertex_location - circumcenters) * sampled_radius + circumcenters
+        if split_mode == "circumcenter":
+            circumcenters, radius = topo_utils.calculate_circumcenters_torch(clone_vertices)
+            radius = radius.reshape(-1, 1)
+            circumcenters = circumcenters.reshape(-1, 3)
+            sphere_loc = sample_uniform_in_sphere(circumcenters.shape[0], 3).to(device)
+            r = torch.randn((clone_indices.shape[0], 1), device=self.model.device)
+            r[r.abs() < 1e-2] = 1e-2
+            sampled_radius = (r * self.split_std + 1) * radius
+            # new_vertex_location = l2_normalize_th(raw_new_vertex_location - circumcenters) * sampled_radius + circumcenters
+            new_vertex_location = l2_normalize_th(sphere_loc) * sampled_radius + circumcenters
+        elif split_mode == "barycentric":
+            barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
+            barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
+            new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
+        else:
+            raise Exception(f"Split mode: {split_mode} not supported")
         # new_s = (self.model.vertex_s_param[clone_indices] * barycentric_weights).sum(dim=1)
         # new_rgb = (self.model.vertex_rgb_param[clone_indices] * barycentric_weights).sum(dim=1)
         # new_sh = (self.model.vertex_sh_param[clone_indices] * barycentric_weights).sum(dim=1)
@@ -374,3 +399,18 @@ class TetOptimizer:
         optim.step = lambda x=1: x
         optim.zero_grad = lambda x=1: x
         return optim
+
+    def regularizer(self):
+        l2_reg = 1e-6 * torch.linalg.norm(list(self.model.encoding.parameters())[0], ord=2)
+        # return l2_reg
+        # split params
+        param = list(self.model.encoding.parameters())[0]
+        weight_decay = 0
+        ind = 0
+        for i in range(self.model.different_size):
+            o = self.model.offsets[i+1] - self.model.offsets[i]
+            weight_decay = weight_decay + (param[ind:self.model.offsets[i+1]]**2).mean()
+            ind += o
+        weight_decay = weight_decay + (param[ind:].reshape(-1, self.model.nominal_offset_size)**2).mean(dim=1).sum()
+        
+        return self.weight_decay * weight_decay# + l2_reg

@@ -577,19 +577,25 @@ SplatTetrahedra load_tet_alphablend(int32_t g_idx,
 //     };
 // }
 
+struct CtrlPt: IDifferentiable {
+    float4 rgba;
+    float t;
+};
+
 [Differentiable]
-float4 evaluate_tetra(SplatTetrahedra g, 
-                      float3 ray_o,
-                      float3 ray_d)
+CtrlPt evaluate_tetra(in SplatTetrahedra g, 
+                      in float3 ray_o,
+                      in float3 ray_d)
 {
     // float dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
-    float dist = ray_tetrahedron_intersect_fused(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
-    if (dist <= 0) {
-        return {0.f, 0.f, 0.f, 0.f};
+    float2 dist = ray_tetrahedron_intersect_fused(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
+    if (dist.x <= 0) {
+        return {{0.f, 0.f, 0.f, 0.f}, dist.y};
     } else {
-        float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dist), 0, 1);
-        return {
+        float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dist.x), 0, 1);
+        float4 rgba = {
             alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
+        return {rgba, dist.y};
     }
 }
 

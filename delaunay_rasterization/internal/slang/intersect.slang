@@ -207,7 +207,7 @@ float ray_tetrahedron_intersect(float3 orig, float3 dir, Tetrahedra g) {
 }
 
 [Differentiable]
-float ray_tetrahedron_intersect_fused(
+float2 ray_tetrahedron_intersect_fused(
     float3 orig, float3 dir,
     float3 v0, float3 v1, float3 v2, float3 v3)
 {
@@ -263,7 +263,7 @@ float ray_tetrahedron_intersect_fused(
             // Ray is almost parallel to plane
             if (dist0 > 0.0f) {
                 // Entire ray is outside
-                return -1.0f;
+                return {-1.0f, 0.f};
             }
         }
         else {
@@ -283,7 +283,7 @@ float ray_tetrahedron_intersect_fused(
         }
 
         if (t_enter > t_exit) {
-            return -1.0f;
+            return {-1.0f, 0.f};
         }
     }
 
@@ -296,7 +296,7 @@ float ray_tetrahedron_intersect_fused(
 
         if (fabs(denom1) < eps) {
             if (dist1 > 0.0f) {
-                return -1.0f;
+                return {-1.0f, 0.f};
             }
         }
         else {
@@ -314,7 +314,7 @@ float ray_tetrahedron_intersect_fused(
         }
 
         if (t_enter > t_exit) {
-            return -1.0f;
+            return {-1.0f, 0.f};
         }
     }
 
@@ -327,7 +327,7 @@ float ray_tetrahedron_intersect_fused(
 
         if (fabs(denom2) < eps) {
             if (dist2 > 0.0f) {
-                return -1.0f;
+                return {-1.0f, 0.f};
             }
         }
         else {
@@ -345,7 +345,7 @@ float ray_tetrahedron_intersect_fused(
         }
 
         if (t_enter > t_exit) {
-            return -1.0f;
+            return {-1.0f, 0.f};
         }
     }
 
@@ -358,7 +358,7 @@ float ray_tetrahedron_intersect_fused(
 
         if (fabs(denom3) < eps) {
             if (dist3 > 0.0f) {
-                return -1.0f;
+                return {-1.0f, 0.f};
             }
         }
         else {
@@ -376,7 +376,7 @@ float ray_tetrahedron_intersect_fused(
         }
 
         if (t_enter > t_exit) {
-            return -1.0f;
+            return {-1.0f, 0.f};
         }
     }
 
@@ -385,7 +385,9 @@ float ray_tetrahedron_intersect_fused(
     //    Return the clipped segment length if it's in front of the origin
     // --------------------------------------------------------------------
     if (t_exit <= 0.0f) {
-        return -1.0f;
+        return {-1.0f, 0.f};
     }
-    return max(t_exit - max(t_enter, 0.0f), 0.0f);
+    float intersection_t = (t_enter + t_exit)/2.f;
+    float dist = max(t_exit - max(t_enter, 0.0f), 0.0f);
+    return {dist, intersection_t};
 }

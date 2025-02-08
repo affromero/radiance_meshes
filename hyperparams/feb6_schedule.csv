@@ -1,0 +1,13 @@
+final_vertices_lr,final_encoding_lr,final_network_lr,clone_schedule
+5.00E-05,1.00E-02,1.00E-03,linear
+5.00E-05,1.00E-02,1.00E-03,quadratic
+5.00E-07,1.00E-02,1.00E-03,linear
+5.00E-07,1.00E-02,1.00E-03,quadratic
+5.00E-05,1.00E-03,1.00E-03,linear
+5.00E-05,1.00E-03,1.00E-03,quadratic
+5.00E-07,1.00E-03,1.00E-03,linear
+5.00E-07,1.00E-03,1.00E-03,quadratic
+5.00E-07,1.00E-03,1.00E-04,linear
+5.00E-07,1.00E-03,1.00E-04,quadratic
+5.00E-05,1.00E-02,1.00E-04,linear
+5.00E-05,1.00E-02,1.00E-04,quadratic

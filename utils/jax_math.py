@@ -15,6 +15,9 @@
 
 """Mathy utility functions."""
 
+import os
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import functools
 
 import jax

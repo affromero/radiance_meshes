@@ -167,7 +167,7 @@ class VertexShader(torch.autograd.Function):
         rect_tile_space = torch.zeros((n_tetra, 4), 
                                       device="cuda", 
                                       dtype=torch.int32)
-        tet_area = torch.zeros((n_tetra), 
+        tet_area = torch.ones((n_tetra), 
                                 device="cuda", 
                                 dtype=torch.float)
         

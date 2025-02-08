@@ -37,18 +37,26 @@ def contract_mean_std(x, std):
 import pytorch3d.transforms
 import torch
 from icecream import ic
+from utils.safe_math import safe_div
+
+def l2_normalize_th(x, eps=torch.finfo(torch.float32).eps, dim=-1):
+    """Normalize x to unit length along last axis."""
+    return x / torch.sqrt(
+        torch.clip(torch.sum(x**2, dim=dim, keepdim=True), eps, None)
+    )
+
+def contract_points(x, eps=torch.finfo(torch.float32).eps, dim=-1):
+    mag = torch.sqrt(
+        torch.clip(torch.sum(x**2, dim=dim, keepdim=True), eps, None)
+    )
+    return torch.where(mag <= 1, x, (2 - (1 / mag)) * (x / mag))
 
 
-def contract_points(x):
-    mag = torch.linalg.norm(x, dim=-1)[..., None]
-    return torch.where(mag < 1, x, (2 - (1 / mag)) * (x / mag))
-
-
-def inv_contract_points(z):
+def inv_contract_points(z, eps=torch.finfo(torch.float32).eps):
     z_mag_sq = torch.sum(z**2, dim=-1, keepdims=True)
     z_mag_sq = torch.maximum(torch.ones_like(z_mag_sq), z_mag_sq)
-    inv_scale = 2 * torch.sqrt(z_mag_sq) - z_mag_sq
-    x = z / inv_scale.clip(min=1e-4)
+    inv_scale = 2 * torch.sqrt(z_mag_sq.clip(min=eps)) - z_mag_sq
+    x = safe_div(z, inv_scale)
     return x
 
 

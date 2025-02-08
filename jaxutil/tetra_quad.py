@@ -249,7 +249,7 @@ def construct_camera_rays(viewmatrix, cam_pos, H, W, focal_x, focal_y):
     return ray_origins, ray_dirs
 
 @functools.partial(jax.jit, static_argnums=(3, 4))
-def render_camera(vertices, indices, rgbs, height, width, viewmat, fx, fy, linspace):
+def render_camera(vertices, indices, rgbs, height, width, viewmat, fx, fy, tmin, linspace):
     """Vectorized camera renderer using JAX."""
     # Extract camera position and convert inputs
     cam_pos = jnp.linalg.inv(viewmat)[:3, 3]
@@ -262,7 +262,7 @@ def render_camera(vertices, indices, rgbs, height, width, viewmat, fx, fy, linsp
     # test_pts = point_dist[:3] / point_dist[2:3]
     # jax.debug.print("NDC: {}\ncam_space: {}", test_pts, point_dist)
     
-    start = jnp.clip(point_dist[2].min(), 0, None)
+    start = jnp.clip(point_dist[2].min(), tmin, None)
     end = point_dist[2].max()*1.2
     tdist = (end - start) * linspace + start
     

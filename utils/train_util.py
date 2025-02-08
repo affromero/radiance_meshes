@@ -125,7 +125,7 @@ def safe_sin(x):
     return safe_trig_helper(x, torch.sin)
 
 
-def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0.1):
+def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0.1, pre_multi=500, ladder_p=-0.1):
     fy = fov2focal(camera.fovy, camera.image_height)
     fx = fov2focal(camera.fovx, camera.image_width)
     K = torch.tensor([
@@ -185,7 +185,7 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
 
     tet_vertices = model.vertices[model.indices]
     # st = time.time()
-    image_rgb = AlphaBlendTiledRender.apply(
+    image_rgb, distortion_img = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
         tile_ranges,
         model.indices,
@@ -196,15 +196,19 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
         world_view_transform,
         K,
         cam_pos,
+        pre_multi,
+        ladder_p,
         min_t,
         camera.fovy,
         camera.fovx)
+    distortion_loss = (distortion_img[:, :, 0] - distortion_img[:, :, 1]).mean()
     # torch.cuda.synchronize()
     # dt2 = (time.time() - st)
     # print(dt1, dt2, 1/(dt1+dt2))
     
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
+        'distortion_loss': distortion_loss,
         'viewspace_points': vs_tetra,
         'visibility_filter': mask,
         'circumcenters': circumcenter,

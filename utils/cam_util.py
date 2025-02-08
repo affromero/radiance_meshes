@@ -212,7 +212,7 @@ def transform_cameras_pca(cameras):
     for i, cam in enumerate(cameras):
         T = np.eye(4)
         T[:3] = new_poses[i][:3]
-        T = torch.linalg.inv(torch.tensor(T).float()).to(cam.world_view_transform.device)
+        T = torch.linalg.inv(torch.tensor(T).float())
         T[:3, 0] = T[:3, 0]*torch.linalg.det(T[:3, :3])
         cameras[i] = set_pose(cam, T)
     return cameras, transform
@@ -239,7 +239,8 @@ def generate_cam_path(cameras, N):
         np.linalg.inv(view.world_view_transform.T.cpu().numpy())[:3]
         for view in flat_cameras], axis=0)
     eposes = generate_ellipse_path(poses, n_frames = N)
-    refcam = cameras[0]
+    refcam = copy.copy(cameras[0])
+    refcam.original_image = None
     render_cams = []
     for i in range(eposes.shape[0]):
         camera = copy.copy(refcam)
@@ -248,7 +249,7 @@ def generate_cam_path(cameras, N):
         T = torch.tensor(T).float()
         T = wT @ T
         T = T @ torch.diag(torch.tensor([-1.0, 1.0, -1.0, 1.0]))
-        T = torch.linalg.inv(T).to(data_device)
+        T = torch.linalg.inv(T)
         camera = set_pose(camera, T)
         camera.uid = i
         render_cams.append(camera)

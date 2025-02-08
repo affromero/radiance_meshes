@@ -22,12 +22,34 @@ from utils.train_util import *
 # from models.vertex_color import Model, TetOptimizer
 from models.ingp_color import Model, TetOptimizer
 from fused_ssim import fused_ssim
-from pathlib import Path
-<<<<<<< HEAD
+from pathlib import Path, PosixPath
 from utils.args import Args
-=======
 import pickle
->>>>>>> 466bedbc5546cb1db65bcc6ffd8fe28adb08a93c
+import json
+from utils import safe_math
+
+class CustomEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, PosixPath):
+            return str(o)
+        return super().default(o)
+
+class SimpleSampler:
+    def __init__(self, total_num_samples, batch_size):
+        self.total_num_samples = total_num_samples
+        self.batch_size = batch_size
+        self.curr = total_num_samples
+        self.ids = None
+
+    def nextids(self, batch_size=None):
+        batch_size = self.batch_size if batch_size is None else batch_size
+        self.curr += batch_size
+        if self.curr + batch_size > self.total_num_samples:
+            # self.ids = torch.LongTensor(np.random.permutation(self.total_num_samples))
+            self.ids = torch.randperm(self.total_num_samples, dtype=torch.long, device=device)
+            self.curr = 0
+        ids = self.ids[self.curr : self.curr + batch_size]
+        return ids
 
 args = Args()
 args.tile_size = 16
@@ -37,8 +59,8 @@ args.cloning_interval = 500
 args.budget = 1_000_000
 args.num_densification_samples = 50
 args.num_densify_iter = 3500
-args.densify_start = 2500
-args.num_iter = args.densify_start + args.num_densify_iter + 1500
+args.densify_start = 1500
+args.num_iter = 7000 # args.densify_start + args.num_densify_iter + 1500
 args.sh_degree_interval = 500
 args.image_folder = "images_4"
 args.eval = True
@@ -48,18 +70,35 @@ args.s_param_lr = 0.025
 args.rgb_param_lr = 0.025
 args.sh_param_lr = 0.0025
 args.vertices_lr = 5e-5
-args.final_vertices_lr = 5e-7
+args.final_vertices_lr = 5e-5
 args.vertices_lr_delay_mult = 0.01
 args.vertices_lr_max_steps = args.num_iter
 args.delaunay_start = 1500
 
-args.log2_hashmap_size = 18
-args.per_level_scale = 1.3
-args.L = 12
-args.scale_multi = 1
+# args.log2_hashmap_size = 18
+# args.per_level_scale = 1.5
+# args.L = 12
+
+args.log2_hashmap_size = 22
+args.per_level_scale = 2
+args.L = 10
+
+args.scale_multi = 1.0
 args.network_lr = 1e-3
+args.final_network_lr = 1e-3
 args.encoding_lr = 1e-2
-args.lambda_ssim = 0.2
+args.final_encoding_lr = 1e-3
+args.lambda_ssim = 0.1
+args.weight_decay = 0.01
+args.additional_pts = 0
+args.render_size_min = 0
+args.vertices_beta = [0.9, 0.99]
+args.lambda_dist = 1e-3
+args.net_weight_decay = 0.0
+
+args.split_std = 0.1
+args.split_mode = "barycentric"
+args.clone_schedule = "linear"
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
@@ -67,6 +106,8 @@ args.output_path.mkdir(exist_ok=True, parents=True)
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device="cuda", eval=args.eval)
+
+args.num_densification_samples = min(len(train_cameras), args.num_densification_samples)
 
 with open('camera.pkl', 'wb') as f:
     pickle.dump(test_cameras[0], f)
@@ -81,20 +122,32 @@ images = []
 psnrs = [[]]
 inds = []
 # def target_num(x):
-#     S = model.vertices.shape[0]
-#     N = args.num_densify_iter // args.cloning_interval
-#     k = (args.budget - S) // N
-#     return (args.budget - S - k * N) // N**2 * x**2 + k * x + S
 
 def target_num(x):
-    S = model.vertices.shape[0]
-    N = args.num_densify_iter // args.cloning_interval
-    k = (args.budget - S) // N
-    return k * x + S
+    if args.clone_schedule == "linear":
+        S = model.vertices.shape[0]
+        N = args.num_densify_iter // args.cloning_interval
+        k = (args.budget - S) // N
+        return k * x + S
+    elif args.clone_schedule == "quadratic":
+        S = model.vertices.shape[0]
+        N = args.num_densify_iter // args.cloning_interval
+        k = 2 * (args.budget - S) // N
+        a = (args.budget - S - k * N) // N**2
+        return a * x**2 + k * x + S
+    else:
+        raise Exception(f"Clone Schedule: {args.clone_schedule} is not supported")
 
 print([target_num(i+1) for i in range(args.num_densify_iter // args.cloning_interval)])
 
+# epath = cam_util.generate_cam_path(train_cameras, 400)
+# sample_camera = epath[175]
+sample_camera = train_cameras[60]
+
+densification_sampler = SimpleSampler(len(train_cameras), args.num_densification_samples)
+
 progress_bar = tqdm(range(args.num_iter))
+torch.cuda.empty_cache()
 for train_ind in progress_bar:
     delaunay_interval = 1 if train_ind < args.delaunay_start else 10
     do_delaunay = train_ind % delaunay_interval == 0 and train_ind > 0
@@ -114,14 +167,14 @@ for train_ind in progress_bar:
     target = camera.original_image.cuda()
 
     st = time.time()
-    render_pkg = render(camera, model, tile_size=args.tile_size)
+    render_pkg = render(camera, model, tile_size=args.tile_size, min_t=model.scene_scaling * 0.1)
     # torch.cuda.synchronize()
     # print(f'render: {(time.time()-st)}')
-    image = render_pkg['render']
+    image = render_pkg['render'].clip(min=0, max=1)
     l2_loss = ((target - image)**2).mean()
-    reg = model.regularizer()
+    reg = tet_optim.regularizer()
     ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
-    loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss + reg
+    loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss + reg + args.lambda_dist * render_pkg['distortion_loss']
 
     st = time.time()
     loss.backward()
@@ -139,7 +192,6 @@ for train_ind in progress_bar:
         tet_optim.vertex_optim.step()
         tet_optim.vertex_optim.zero_grad()
     # print(f'bw: {(time.time()-st)}')
-    tet_optim.update_ema()
     tet_optim.update_learning_rate(train_ind)
 
     if do_sh:
@@ -151,16 +203,14 @@ for train_ind in progress_bar:
         tet_optim.vertex_optim.zero_grad()
         tet_optim.sh_optim.zero_grad()
 
-        full_inds = list(range(len(train_cameras)))
-        random.shuffle(full_inds)
 
-        sampled_cameras = [train_cameras[i] for i in full_inds[:args.num_densification_samples]]
-        tet_rgbs_grad = None
+        sampled_cameras = [train_cameras[i] for i in densification_sampler.nextids()]
+        tet_rgbs_grad = torch.zeros((model.indices.shape[0]), device=device)
         for camera in sampled_cameras:
             render_pkg = render(camera, model, register_tet_hook=True, tile_size=args.tile_size)
             # torch.cuda.synchronize()
             # print(f'render: {(time.time()-st)}')
-            image = render_pkg['render']
+            image = render_pkg['render'].clip(min=0, max=1)
             l2_loss = ((target - image)**2).mean()
             ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
             loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss
@@ -169,7 +219,10 @@ for train_ind in progress_bar:
             loss.backward()
             with torch.no_grad():
                 tet_grad = render_pkg['tet_grad'][0]
-                scores = tet_grad.abs().sum(dim=-1)# / render_pkg['tet_area'].clip(min=1e-8)
+                # tet_rgbs_grad = update_rgbs(tet_rgbs_grad, tet_grad, render_pkg['tet_area'])
+
+                render_size_area = render_pkg['tet_area'].clip(min=args.render_size_min) if args.render_size_min > 0 else 1
+                scores = tet_grad.abs().sum(dim=-1) / render_size_area
                 if tet_rgbs_grad is None:
                     tet_rgbs_grad = scores
                 else:
@@ -178,42 +231,38 @@ for train_ind in progress_bar:
             tet_optim.optim.zero_grad()
             tet_optim.vertex_optim.zero_grad()
             torch.cuda.empty_cache()
+            # del scores, tet_grad, render_pkg
 
-        # tet_optim.track_gradients()
+        with torch.no_grad():
+            target_addition = target_num((train_ind - args.densify_start) // args.cloning_interval + 1) - model.vertices.shape[0]
+            ic(target_addition, (train_ind - args.densify_start) // args.cloning_interval + 1)
+            rgbs_threshold = torch.sort(tet_rgbs_grad).values[-min(int(target_addition), tet_rgbs_grad.shape[0])]
 
-        # tet_optim.optim.step()
-        # tet_optim.vertex_optim.step()
-        # tet_optim.sh_optim.step()
+            clone_mask = tet_rgbs_grad > rgbs_threshold
 
-        target_addition = target_num((train_ind - args.densify_start) // args.cloning_interval + 1) - model.vertices.shape[0]
-        ic(target_addition, (train_ind - args.densify_start) // args.cloning_interval + 1)
-        rgbs_threshold = torch.sort(tet_rgbs_grad).values[-min(int(target_addition), tet_rgbs_grad.shape[0])]
+            # rgbs_grad, vertex_grad = tet_optim.get_tracker_predicates() 
+            # reduce_type = "sum"
+            # # tet_std = torch.std(model.vertex_rgbs_param[model.indices], dim=1).max(dim=1).values
+            # tet_rgbs_grad = rgbs_grad[model.indices].sum(dim=1)
+            # tet_vertex_grad = vertex_grad[model.indices].sum(dim=1)
+            # clone_mask = (tet_rgbs_grad > rgbs_threshold) | (tet_vertex_grad > vertex_threshold)
+            clone_indices = model.indices[clone_mask]
 
-        clone_mask = tet_rgbs_grad > rgbs_threshold
+            tet_optim.split(clone_indices, args.split_mode)
 
-        # rgbs_grad, vertex_grad = tet_optim.get_tracker_predicates() 
-        # reduce_type = "sum"
-        # # tet_std = torch.std(model.vertex_rgbs_param[model.indices], dim=1).max(dim=1).values
-        # tet_rgbs_grad = rgbs_grad[model.indices].sum(dim=1)
-        # tet_vertex_grad = vertex_grad[model.indices].sum(dim=1)
-        # clone_mask = (tet_rgbs_grad > rgbs_threshold) | (tet_vertex_grad > vertex_threshold)
-        clone_indices = model.indices[clone_mask]
+            # new_vertex_location, radius = topo_utils.calculate_circumcenters_torch(model.vertices[clone_indices])
+            # new_feat = model.vertex_rgbs_param[clone_indices].mean(dim=1)
+            # perturb = sample_uniform_in_sphere(new_vertex_location.shape[0], 3).to(new_vertex_location.device)
+            # tet_optim.add_points(new_vertex_location + radius.reshape(-1, 1) * perturb, new_feat)
 
-        tet_optim.split(clone_indices)
-
-        # new_vertex_location, radius = topo_utils.calculate_circumcenters_torch(model.vertices[clone_indices])
-        # new_feat = model.vertex_rgbs_param[clone_indices].mean(dim=1)
-        # perturb = sample_uniform_in_sphere(new_vertex_location.shape[0], 3).to(new_vertex_location.device)
-        # tet_optim.add_points(new_vertex_location + radius.reshape(-1, 1) * perturb, new_feat)
-
-        out = f"#RGBS Clone: {(tet_rgbs_grad > rgbs_threshold).sum()} "
-        # out += f"#Vertex Clone: {(tet_vertex_grad > vertex_threshold).sum()} "
-        out += f"∇RGBS: {tet_rgbs_grad.mean()} "
-        out += f"target_addition: {target_addition} "
-        # out += f"∇Vertex: {tet_vertex_grad.mean()} "
-        # out += f"σ: {tet_std.mean()}"
-        print(out)
-        torch.cuda.empty_cache()
+            out = f"#RGBS Clone: {(tet_rgbs_grad > rgbs_threshold).sum()} "
+            # out += f"#Vertex Clone: {(tet_vertex_grad > vertex_threshold).sum()} "
+            out += f"∇RGBS: {tet_rgbs_grad.mean()} "
+            out += f"target_addition: {target_addition} "
+            # out += f"∇Vertex: {tet_vertex_grad.mean()} "
+            # out += f"σ: {tet_std.mean()}"
+            print(out)
+            torch.cuda.empty_cache()
 
     psnr = 20 * math.log10(1.0 / math.sqrt(l2_loss.detach().cpu().item()))
     psnrs[-1].append(psnr)
@@ -232,8 +281,7 @@ for train_ind in progress_bar:
     with torch.no_grad():
         if train_ind % 1 == 0:
             train_ind = 1
-            camera = train_cameras[train_ind]
-            render_pkg = render(camera, model, tile_size=args.tile_size)
+            render_pkg = render(sample_camera, model, tile_size=args.tile_size)
             image = render_pkg['render']
             image = image.permute(1, 2, 0)
             image = image.detach().cpu().numpy()
@@ -244,11 +292,18 @@ for train_ind in progress_bar:
         st = time.time()
         model.update_triangulation()
         # print(f'update: {(time.time()-st)}')
+        # torch.cuda.empty_cache()
 
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 plt.plot(range(len(avged_psnrs)), avged_psnrs)
 plt.show()
 mediapy.write_video(args.output_path / "training.mp4", images)
+
+with (args.output_path / "alldata.json").open("w") as f:
+    all_data = dict(**args.as_dict(), 
+        psnr = avged_psnrs[-1],
+    )
+    json.dump(all_data, f, cls=CustomEncoder)
 
 torch.cuda.synchronize()
 torch.cuda.empty_cache()
@@ -264,5 +319,4 @@ with torch.no_grad():
         eimages.append(image)
 
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)
-model.save2ply(args.output_path / "test" / "ckpt.ply")
-
+model.save2ply(args.output_path / "ckpt.ply")

@@ -101,8 +101,9 @@ def test_tetrahedra_rendering(vertices, indices, rgbs, viewmat, n_samples=10000,
         render_grid
     )
     
+    tmin = 0.05
     # Render using PyTorch implementation
-    torch_image = AlphaBlendTiledRender.apply(
+    torch_image, _ = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
         tile_ranges,
         indices,
@@ -112,6 +113,9 @@ def test_tetrahedra_rendering(vertices, indices, rgbs, viewmat, n_samples=10000,
         viewmat.cuda(),
         projection_matrix.cuda(),
         cam_pos.cuda(),
+        tmin,
+        1000,
+        -0.1,
         fovy,
         fovx
     )
@@ -120,7 +124,7 @@ def test_tetrahedra_rendering(vertices, indices, rgbs, viewmat, n_samples=10000,
         vertices.detach().cpu().numpy(), indices.cpu().numpy(),
         rgbs.detach().cpu().numpy(),
         height, width, viewmat.cpu().numpy(),
-        fx.item(), fy.item(), np.linspace(0, 1, n_samples))
+        fx.item(), fy.item(), tmin, np.linspace(0, 1, n_samples))
 
     # Compare results
     torch_image_np = torch_image[..., :3].cpu().detach().numpy()

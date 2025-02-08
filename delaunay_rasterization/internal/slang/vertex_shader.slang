@@ -209,9 +209,9 @@ void vertex_shader(TensorView<int32_t> indices,
 
     float3 view_dir = { cam.world_view_transform._31, cam.world_view_transform._32, cam.world_view_transform._33 };
     if (contains_ray_origin) {
-        out_tet_area[g_idx] = cam.H * cam.W;
+        out_tet_area[g_idx] = (float) (cam.H * cam.W);
     } else {
-        out_tet_area[g_idx] = no_diff tet_area(camspace_tet2image_w_depth(camspace_tet, cam), view_dir, cam);
+        out_tet_area[g_idx] = max(no_diff tet_area(camspace_tet2image_w_depth(camspace_tet, cam), view_dir, cam), 1);
     }
 
     float3 circumcenter = calculate_circumcenter(tet);
