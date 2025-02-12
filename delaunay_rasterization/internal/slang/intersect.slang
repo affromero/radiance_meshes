@@ -391,3 +391,98 @@ float2 ray_tetrahedron_intersect_fused(
     float dist = max(t_exit - max(t_enter, 0.0f), 0.0f);
     return {dist, intersection_t};
 }
+
+[Differentiable]
+bool ray_triangle_intersect_2D(
+    float2 pixelPos,                 // The 2D pixel coordinate (screen space)
+    float2 t0, float2 t1, float2 t2, // 2D positions of the triangle vertices
+    float w0, float w1, float w2,     // 1/distance at each vertex (reciprocal of camera distance)
+    out float distance
+)
+{
+    // Edges relative to t0
+    float2 e0 = t1 - t0;
+    float2 e1 = t2 - t0;
+    float2 v = pixelPos - t0;
+
+    // Compute dot products
+    float dot00 = dot(e0, e0);
+    float dot01 = dot(e0, e1);
+    float dot02 = dot(e0, v);
+    float dot11 = dot(e1, e1);
+    float dot12 = dot(e1, v);
+
+    // Compute barycentric denominator
+    float denom = dot00 * dot11 - dot01 * dot01;
+
+    // Compute barycentric coordinates (alpha, beta, gamma)
+    float alpha = (dot11 * dot02 - dot01 * dot12) / denom;
+    float beta = (dot00 * dot12 - dot01 * dot02) / denom;
+    float gamma = 1.0 - alpha - beta;
+
+    // Check if we are inside the triangle
+    if (alpha < 0.0f || beta < 0.0f || gamma < 0.0f)
+    {
+        // Return negative to indicate "outside"
+        return false;
+    }
+
+    // Interpolate 1/distance
+    float reciprocalDist = alpha * w1 + beta * w2 + gamma * w0;
+
+    // Avoid division by zero
+    if (reciprocalDist <= 0.0f)
+    {
+        return false;
+    }
+
+    // Final perspective-correct distance
+    distance = 1.0f / reciprocalDist;
+    return true;
+}
+
+[Differentiable]
+float2 ray_tetrahedron_intersect_2D(float2 pixelPos, float tmin, Tetrahedra g) {
+    float2 v0 = { g.verts[0].x, g.verts[0].y };
+    float2 v1 = { g.verts[1].x, g.verts[1].y };
+    float2 v2 = { g.verts[2].x, g.verts[2].y };
+    float2 v3 = { g.verts[3].x, g.verts[3].y };
+    float w0 = g.verts[0].z;
+    float w1 = g.verts[1].z;
+    float w2 = g.verts[2].z;
+    float w3 = g.verts[3].z;
+
+    bool hit = false;
+    float t_enter = FLT_MAX;
+    float t_exit = -FLT_MAX;
+
+    // Check intersection with each face of the tetrahedron
+    float t;
+    if (ray_triangle_intersect_2D(pixelPos, v0, v1, v2, w0, w1, w2, t)) {
+        hit = true;
+        t_enter = min(t_enter, t);
+        t_exit = max(t_exit, t);
+    }
+    if (ray_triangle_intersect_2D(pixelPos, v0, v1, v3, w0, w1, w3, t)) {
+        hit = true;
+        t_enter = min(t_enter, t);
+        t_exit = max(t_exit, t);
+    }
+    if (ray_triangle_intersect_2D(pixelPos, v0, v2, v3, w0, w2, w3, t)) {
+        hit = true;
+        t_enter = min(t_enter, t);
+        t_exit = max(t_exit, t);
+    }
+
+    if (ray_triangle_intersect_2D(pixelPos, v1, v2, v3, w1, w2, w3, t)) {
+        hit = true;
+        t_enter = min(t_enter, t);
+        t_exit = max(t_exit, t);
+    }
+
+    if (hit) {
+        return {max(t_exit - max(t_enter, tmin), 0), (t_enter+t_exit)/2};
+    } else {
+        return {-1, 0};
+    }
+}

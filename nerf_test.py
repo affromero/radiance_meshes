@@ -27,6 +27,8 @@ from utils.args import Args
 import pickle
 import json
 from utils import safe_math
+from delaunay_rasterization.internal.render_err import render_err
+import imageio
 
 class CustomEncoder(json.JSONEncoder):
     def default(self, o):
@@ -59,7 +61,7 @@ args.cloning_interval = 500
 args.budget = 1_000_000
 args.num_densification_samples = 50
 args.num_densify_iter = 3500
-args.densify_start = 1500
+args.densify_start = 2000
 args.num_iter = 7000 # args.densify_start + args.num_densify_iter + 1500
 args.sh_degree_interval = 500
 args.image_folder = "images_4"
@@ -93,8 +95,10 @@ args.lambda_dist = 1e-3
 args.net_weight_decay = 0.0
 args.clip_multi = 1e-4
 
+# args.ladder_p = -0.5
+# args.pre_multi = 4000.0
 args.ladder_p = -0.1
-args.pre_multi = 500.0
+args.pre_multi = 500
 
 args.split_std = 0.1
 args.split_mode = "barycentric"
@@ -108,9 +112,6 @@ train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device="cuda", eval=args.eval)
 
 args.num_densification_samples = min(len(train_cameras), args.num_densification_samples)
-
-with open('camera.pkl', 'wb') as f:
-    pickle.dump(test_cameras[0], f)
 
 camera = train_cameras[0]
 
@@ -205,25 +206,28 @@ for train_ind in progress_bar:
         tet_optim.sh_optim.zero_grad()
 
 
+        cmap = plt.get_cmap("jet")
         sampled_cameras = [train_cameras[i] for i in densification_sampler.nextids()]
         tet_rgbs_grad = torch.zeros((model.indices.shape[0]), device=device)
         for camera in sampled_cameras:
-            render_pkg = render(camera, model, register_tet_hook=True, tile_size=args.tile_size)
-            # torch.cuda.synchronize()
-            # print(f'render: {(time.time()-st)}')
-            image = render_pkg['render'].clip(min=0, max=1)
-            l2_loss = ((target - image)**2).mean()
-            ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
-            loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss
-            # loss = l2_loss
+
+            # render_pkg = render(camera, model, register_tet_hook=True, tile_size=args.tile_size)
+            # # torch.cuda.synchronize()
+            # # print(f'render: {(time.time()-st)}')
+            # image = render_pkg['render'].clip(min=0, max=1)
+            # l2_loss = ((target - image)**2).mean()
+            # ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
+            # loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss
+            # # loss = l2_loss
         
-            loss.backward()
+            # loss.backward()
+            # tet_grad = render_pkg['tet_grad'][0]
+
             with torch.no_grad():
-                tet_grad = render_pkg['tet_grad'][0]
+                tet_grad = render_err(target, camera, model, tile_size=args.tile_size, lambda_ssim=args.lambda_ssim)
                 # tet_rgbs_grad = update_rgbs(tet_rgbs_grad, tet_grad, render_pkg['tet_area'])
 
-                render_size_area = render_pkg['tet_area'].clip(min=args.render_size_min) if args.render_size_min > 0 else 1
-                scores = tet_grad.abs().sum(dim=-1) / render_size_area
+                scores = tet_grad#.abs().sum(dim=-1)
                 if tet_rgbs_grad is None:
                     tet_rgbs_grad = scores
                 else:
@@ -233,6 +237,20 @@ for train_ind in progress_bar:
             tet_optim.vertex_optim.zero_grad()
             torch.cuda.empty_cache()
             # del scores, tet_grad, render_pkg
+
+        with torch.no_grad():
+            tensor_min, tensor_max = tet_rgbs_grad.min(), tet_rgbs_grad.max()
+            normalized_tensor = (tet_rgbs_grad - tensor_min) / (tensor_max - tensor_min)
+
+            # Convert to RGB (NxMx3) using the colormap
+            tet_grad_color = torch.as_tensor(cmap(normalized_tensor.cpu().numpy())).float().cuda()
+            tet_grad_color[:, 3] = model.get_cell_values(camera)[:, 3]
+            render_pkg = render(sample_camera, model, cell_values=tet_grad_color, tile_size=args.tile_size)
+
+            image = render_pkg['render']
+            image = image.permute(1, 2, 0)
+            image = (image.detach().cpu().numpy() * 255).clip(min=0, max=255).astype(np.uint8)
+            imageio.imwrite(args.output_path / f'grad{train_ind}.png', image)
 
         with torch.no_grad():
             target_addition = target_num((train_ind - args.densify_start) // args.cloning_interval + 1) - model.vertices.shape[0]

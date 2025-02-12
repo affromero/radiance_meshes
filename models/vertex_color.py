@@ -99,7 +99,8 @@ class Model:
         vertex_s_param = nn.Parameter(vertex_s_param)
         vertex_rgb_param = nn.Parameter(vertex_rgb_param)
         vertex_sh_param = nn.Parameter(vertex_sh_param)
-        model = Model(vertices, vertex_s_param, vertex_rgb_param, vertex_sh_param, sh_deg, sh_deg)
+        model = Model(vertices, vertex_s_param, vertex_rgb_param, vertex_sh_param, sh_deg, sh_deg,
+                      torch.zeros((3), device=device), 1)
         return model
 
     @staticmethod

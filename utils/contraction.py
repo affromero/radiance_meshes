@@ -34,7 +34,6 @@ def contract_mean_std(x, std):
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import pytorch3d.transforms
 import torch
 from icecream import ic
 from utils.safe_math import safe_div
@@ -81,29 +80,3 @@ def contract_gaussians(means, covs, densities):
 
 def inv_contract_gaussians(means, covs, densities):
     return track_gaussians(inv_contract_points, means, covs, densities)
-
-
-def to_cov(scale, quat):
-    R = pytorch3d.transforms.quaternion_to_matrix(quat)
-    S2 = torch.zeros_like(R)
-    S2[:, 0, 0] = scale[:, 0] ** 2
-    S2[:, 1, 1] = scale[:, 1] ** 2
-    S2[:, 2, 2] = scale[:, 2] ** 2
-    return torch.bmm(torch.bmm(R.permute(0, 2, 1), S2), R)
-
-
-def from_covs(Ms):
-    eig = torch.linalg.eig(Ms)
-    scales2 = eig.eigenvalues.real.clip(min=1e-10).sqrt()
-    R2 = eig.eigenvectors.real.permute(0, 2, 1)
-    R2 = R2 * torch.linalg.det(R2).reshape(-1, 1, 1)
-    q2 = pytorch3d.transforms.matrix_to_quaternion(R2)
-    return scales2, q2
-
-
-def inv_contract_gaussians_decomposed(means, scales, quats, densities):
-    covs = to_cov(scales, quats)
-    new_means, new_covs, new_densities = inv_contract_gaussians(means, covs, densities)
-    new_scales, new_quats = from_covs(new_covs)
-    return new_means, new_scales, new_quats, new_densities
-

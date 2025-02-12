@@ -6,9 +6,10 @@ from utils import optim
 from sh_slang.eval_sh import eval_sh
 from delaunay_rasterization.internal.alphablend_tiled_slang import AlphaBlendTiledRender, render_alpha_blend_tiles_slang_raw
 from delaunay_rasterization.internal.render_grid import RenderGrid
-from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader
+from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader, point2image
 import numpy as np
 from utils import topo_utils, train_util
+from icecream import ic
 
 def sample_uniform_in_sphere(batch_size, dim, radius=1.0, device=None):
     """
@@ -138,7 +139,7 @@ def safe_sin(x):
     return safe_trig_helper(x, torch.sin)
 
 
-def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0.1, pre_multi=500, ladder_p=-0.1, clip_multi=1e-4, **kwargs):
+def render(camera: Camera, model, cell_values=None, register_tet_hook=False, tile_size=16, min_t=0.1, pre_multi=500, ladder_p=-0.1, clip_multi=1e-4, **kwargs):
     fy = fov2focal(camera.fovy, camera.image_height)
     fx = fov2focal(camera.fovx, camera.image_width)
     K = torch.tensor([
@@ -147,7 +148,7 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
     [0, 0, 1],
     ]).to(camera.world_view_transform.device)
 
-    cam_pos = camera.world_view_transform.T.inverse()[:, 3]
+    cam_pos = camera.world_view_transform.T.inverse()[:3, 3]
 
     # render_pkg = render_alpha_blend_tiles_slang_raw(model.indices, model.vertices, None,
     #                                                 camera.world_view_transform.T, K, cam_pos,
@@ -183,8 +184,11 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
         camera.fovy,
         camera.fovx,
         render_grid)
-    cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
-    cell_values[mask] = model.get_cell_values(camera, mask)
+    # world_view_transform.T @ model.vertices
+    if cell_values is None:
+        cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
+        cell_values[mask] = model.get_cell_values(camera, mask)
+        # cell_values = model.get_cell_values(camera)
     # cell_values = model.get_cell_values(camera)
     tet_grads = []
     if register_tet_hook:
@@ -199,6 +203,7 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
         pass
 
     tet_vertices = model.vertices[model.indices]
+    # verts_trans = point2image(model.vertices, world_view_transform, K, cam_pos)
     # st = time.time()
     image_rgb, distortion_img = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
@@ -206,6 +211,7 @@ def render(camera: Camera, model, register_tet_hook=False, tile_size=16, min_t=0
         model.indices,
         # tet_vertices,
         model.vertices,
+        # verts_trans,
         cell_values,
         render_grid,
         world_view_transform,

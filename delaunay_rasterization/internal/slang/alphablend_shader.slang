@@ -115,7 +115,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                    uint32_t H,
                    uint32_t W)
 {
-    float2 center_pix_coord = pix_coord;
+    float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
     float4 curr_pixel_state = float4(0.f, 0.f, 0.f, 1.f);
     float4 curr_distortion_state = float4(0.f, 0.f, 0.f, 0.f);
     AlphaOut ao = {
@@ -156,6 +156,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 local_n_contrib++;
                 SplatTetrahedra g = collected_splats[j];
                 CtrlPt tetra_ctrl = evaluate_tetra(g, ray.o, ray.d);
+                // CtrlPt tetra_ctrl = evaluate_tetra_2D(g, cam, min_t, center_pix_coord);
                 // if (tetra_ctrl.rgba.a < 1/255.f) continue;
                 // if (true) {
                 //     printf("tetra rgba: %f, %f, %f, %f\n",
@@ -207,6 +208,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                      uint32_t W,
                      AlphaOut d_ao)
 {
+    float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
     // Load the final pixel state.
     bool is_inside = (pix_coord.x < W && pix_coord.y < H);
     uint32_t block_size = tile_height * tile_width;
@@ -232,8 +234,6 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
         n_contrib_fwd = n_contributors[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)];
     }
     AlphaOut ao = {current_pixel_state, curr_distortion_state};
-
-    float2 center_pix_coord = pix_coord;
 
     Ray ray = get_ray(cam, center_pix_coord, min_t);
 
@@ -262,12 +262,10 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 SplatTetrahedra g = collected_splats[j];
 
                 CtrlPt tetra_ctrl = evaluate_tetra(g, ray.o, ray.d);
+                // CtrlPt tetra_ctrl = evaluate_tetra_2D(g, cam, min_t, center_pix_coord);
                 if (tetra_ctrl.rgba.a < 1/255.f) continue;
 
                 // Undo pixel state
-                // if (print) {
-                //     printf("1st Pixel State: %f, %f, %f, %f\n", current_pixel_state.x, current_pixel_state.y, current_pixel_state.z, current_pixel_state.w);
-                // }
                 ao = undo_alpha_out(ao, tetra_ctrl, pre_multi, ladder_p);
 
                 // Back-prop automatically through blending and gaussian evaluation.
@@ -278,20 +276,9 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 DifferentialPair<AlphaOut> dp_ao = diffPair(ao);
 
                 bwd_diff(update_alpha_out)(dp_ao, dp_tetra_ctrl, pre_multi, ladder_p, d_ao);
-                // if (print) {
-                //     printf("Pixel State: %f, %f, %f, %f\n", dp_current_pixel_state.p.x, dp_current_pixel_state.p.y, dp_current_pixel_state.p.z, dp_current_pixel_state.p.w);
-                //     printf("Tetra RGBA: %f, %f, %f, %f\n", tetra_rgba.x, tetra_rgba.y, tetra_rgba.z, tetra_rgba.w);
-                //     printf("D Pixel State: %f, %f, %f, %f\n", dp_current_pixel_state.d.x, dp_current_pixel_state.d.y, dp_current_pixel_state.d.z, dp_current_pixel_state.d.w);
-                //     printf("D RGBA: %f, %f, %f, %f\n", dp_tetra_rgba.d.x, dp_tetra_rgba.d.y, dp_tetra_rgba.d.z, dp_tetra_rgba.d.w);
-                // }
                 d_ao = dp_ao.getDifferential();
                 bwd_diff(evaluate_tetra)(dp_g, dp_ray_o, dp_ray_d, dp_tetra_ctrl.d);
-                // if (print) {
-                //     printf("D V0: %f, %f, %f\n", dp_g.d.tet.verts[0].x, dp_g.d.tet.verts[0].y, dp_g.d.tet.verts[0].z);
-                //     printf("D V1: %f, %f, %f\n", dp_g.d.tet.verts[1].x, dp_g.d.tet.verts[1].y, dp_g.d.tet.verts[1].z);
-                //     printf("D V2: %f, %f, %f\n", dp_g.d.tet.verts[2].x, dp_g.d.tet.verts[2].y, dp_g.d.tet.verts[2].z);
-                //     printf("D V3: %f, %f, %f\n", dp_g.d.tet.verts[3].x, dp_g.d.tet.verts[3].y, dp_g.d.tet.verts[3].z);
-                // }
+                // bwd_diff(evaluate_tetra_2D)(dp_g, cam, min_t, dp_center_pix_coord, dp_tetra_ctrl.d);
                 bwd_diff(load_tet_alphablend)(g_idx, vertices, indices, rgbs, dp_g.d);
             }
         }
@@ -367,4 +354,143 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
       distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2), pixel_states.distortion_state.b);
       distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3), pixel_states.distortion_state.a);
     }
+}
+
+void kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
+                  TensorView<int32_t> indices,
+                  TensorView<float> vertices,
+                  TensorView<float> rgbs,
+                  TensorView<float> final_pixel_state,
+                  TensorView<float> tet_err,
+                  TensorView<int32_t> n_contributors,
+                  Camera cam,
+                  no_diff float min_t,
+                  uint32_t2 pix_coord,
+                  uint32_t tile_idx_start,
+                  uint32_t tile_idx_end,
+                  uint32_t tile_height,
+                  uint32_t tile_width,
+                  uint32_t H,
+                  uint32_t W,
+                  float pixel_err)
+{
+    float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
+    // Load the final pixel state.
+    bool is_inside = (pix_coord.x < W && pix_coord.y < H);
+    uint32_t block_size = tile_height * tile_width;
+    const int rounds = ((tile_idx_end - tile_idx_start + block_size - 1) / block_size);
+
+    int splats_left_to_process = tile_idx_end - tile_idx_start;
+    uint32_t current_splat_offset = tile_idx_end - tile_idx_start;
+
+    float t, old_t;
+    float4 current_pixel_state;
+    int32_t n_contrib_fwd;
+    if (is_inside) {
+        current_pixel_state = float4(final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)],
+                                     final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1)],
+                                     final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2)],
+                                     final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3)]);
+        n_contrib_fwd = n_contributors[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)];
+    }
+
+    Ray ray = get_ray(cam, center_pix_coord, min_t);
+
+    DifferentialPair<float2> dp_center_pix_coord = diffPair(center_pix_coord);
+
+    uint32_t thread_rank = cudaThreadIdx().y * cudaBlockDim().x + cudaThreadIdx().x;
+    for (int i = 0; i < rounds; i++)
+    {
+        // Collectively fetch per-Gaussian data from global to shared
+        AllMemoryBarrierWithGroupSync();
+        int progress = i * block_size + thread_rank;
+        if (tile_idx_start + progress < tile_idx_end)
+        {
+            uint32_t coll_id = uint32_t(sorted_gauss_idx[tile_idx_end - progress - 1]);
+            collected_idx[thread_rank] = coll_id;
+            collected_splats[thread_rank] = load_tet_alphablend(coll_id, vertices, indices, rgbs);
+        }
+        AllMemoryBarrierWithGroupSync();
+        if (is_inside) {
+            for (int j = 0; j < min(block_size, splats_left_to_process); j++)
+            {
+                current_splat_offset--;
+                if (current_splat_offset >= n_contrib_fwd)
+                    continue;
+                uint32_t g_idx = collected_idx[j];
+                SplatTetrahedra g = collected_splats[j];
+
+                CtrlPt tetra_ctrl = evaluate_tetra(g, ray.o, ray.d);
+                // CtrlPt tetra_ctrl = evaluate_tetra_2D(g, cam, min_t, center_pix_coord);
+                if (tetra_ctrl.rgba.a < 1/255.f) continue;
+
+                // Undo pixel state
+                current_pixel_state = undo_pixel_state(current_pixel_state, tetra_ctrl.rgba);
+
+                float err = current_pixel_state.a * tetra_ctrl.rgba.a * pixel_err;
+                // printf("(%i: %f, %f, %f)", g_idx, current_pixel_state.a, tetra_ctrl.rgba.a, pixel_err);
+                float old_val;
+                tet_err.InterlockedAdd(g_idx, err, old_val);
+
+            }
+        }
+        splats_left_to_process -= block_size;
+    }
+}
+
+[AutoPyBindCUDA]
+[CUDAKernel]
+void calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
+                 TensorView<int32_t> tile_ranges,
+                 TensorView<int32_t> indices,
+                 TensorView<float> vertices,
+                 TensorView<float> rgbs,
+                 TensorView<float> output_img,
+                 TensorView<float> pixel_err,
+                 TensorView<float> tet_err,
+                 TensorView<int32_t> n_contributors,
+                 int grid_height,
+                 int grid_width,
+
+                 int image_height,
+                 int image_width,
+                 TensorView<float> world_view_transform,
+                 TensorView<float> K,
+                 TensorView<float> cam_pos,
+                 no_diff float min_t,
+                 no_diff float fovy,
+                 no_diff float fovx,
+                 int tile_height,
+                 int tile_width)
+{
+    uint32_t3 globalIdx = cudaBlockIdx() * cudaBlockDim() + cudaThreadIdx();
+
+    uint32_t2 pix_coord = globalIdx.xy;
+
+    uint32_t tile_idx = cudaBlockIdx().y * grid_width + cudaBlockIdx().x;
+    uint32_t tile_idx_start = uint32_t(tile_ranges[uint2(tile_idx, 0)]);
+    uint32_t tile_idx_end = uint32_t(tile_ranges[uint2(tile_idx, 1)]);
+
+    bool is_inside = (pix_coord.x < output_img.size(1) && pix_coord.y < output_img.size(0));
+
+    Camera cam = load_camera(world_view_transform, K, cam_pos, fovy, fovx, image_height, image_width);
+
+    kern_calc_tet_err(
+        sorted_gauss_idx,
+        indices,
+        vertices,
+        rgbs,
+        output_img,
+        tet_err,
+        n_contributors,
+        cam,
+        min_t,
+        pix_coord,
+        tile_idx_start,
+        tile_idx_end,
+        tile_height,
+        tile_width,
+        output_img.size(0),
+        output_img.size(1), 
+        pixel_err[uint2(uint32_t(pix_coord.y), uint32_t(pix_coord.x))]);
 }

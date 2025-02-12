@@ -7,7 +7,7 @@ from pathlib import Path
 from jaxutil import tetra_quad
 from delaunay_rasterization.internal.alphablend_tiled_slang import AlphaBlendTiledRender
 from delaunay_rasterization.internal.render_grid import RenderGrid
-from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader
+from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader, point2image
 from pyquaternion import Quaternion
 from icecream import ic
 from jax import jacrev, grad
@@ -100,6 +100,7 @@ def test_tetrahedra_rendering(vertices, indices, rgbs, viewmat, n_samples=10000,
         fovx,
         render_grid
     )
+    verts_trans = point2image(vertices, viewmat.cuda(), projection_matrix.cuda(), cam_pos.cuda())
     
     tmin = 0.05
     # Render using PyTorch implementation
@@ -107,7 +108,9 @@ def test_tetrahedra_rendering(vertices, indices, rgbs, viewmat, n_samples=10000,
         sorted_tetra_idx,
         tile_ranges,
         indices,
-        vertices[indices],
+        # vertices[indices],
+        vertices,
+        # verts_trans,
         rgbs,
         render_grid,
         viewmat.cuda(),

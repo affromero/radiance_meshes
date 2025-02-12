@@ -1,0 +1,3 @@
+output_folder,gpu_id,final_vertices_lr,density_offset,vertices_lr,error,scale_multi
+output/sm0.5_do-5_vl2.00E-04_fvl2.00E-05_7f657f,2,2.00E-05,-5,2.00E-04,Process failed and no JSON output file found,0.5
+output/sm0.5_do-5_vl8.00E-05_fvl8.00E-06_9a60ee,0,8.00E-06,-5,8.00E-05,Process failed and no JSON output file found,0.5

@@ -21,6 +21,8 @@ from utils.train_util import RGB2SH, safe_exp, get_expon_lr_func, sample_uniform
 from utils import topo_utils
 from utils.graphics_utils import l2_normalize_th
 from typing import List
+from utils import hashgrid
+from torch.utils.checkpoint import checkpoint
 
 def next_multiple(value, multiple):
     """Round `value` up to the nearest multiple of `multiple`."""
@@ -142,7 +144,15 @@ class Model:
             per_level_scale=per_level_scale
         )
         self.per_level_scale = per_level_scale
-        self.encoding = tcnn.Encoding(3, config).to(self.device)
+        # self.encoding = tcnn.Encoding(3, config).to(self.device)
+
+        self.encoding = torch.compile(hashgrid.HashEmbedderOptimized(
+            [torch.zeros((3), device=self.device), torch.ones((3), device=self.device)],
+            self.L, n_features_per_level=self.dim,
+            log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
+            finest_resolution=base_resolution*per_level_scale**self.L)).to(self.device)
+
+
         self.network = tcnn.Network(self.encoding.n_output_dims, 4, dict(
             # otype="CutlassMLP",
             otype="FullyFusedMLP",
@@ -154,7 +164,7 @@ class Model:
         ))
         offsets, pred_total = compute_grid_offsets(config, 3)
         total = list(self.encoding.parameters())[0].shape[0]
-        ic(offsets, pred_total, total)
+        # ic(offsets, pred_total, total)
         # assert total == pred_total, f"Pred #params: {pred_total} vs {total}"
         resolution = grid_scale(L-1, per_level_scale, base_resolution)
         ic(resolution)
@@ -235,7 +245,8 @@ class Model:
         n = torch.arange(self.L, device=self.device).reshape(1, 1, -1)
         erf_x = safe_div(torch.tensor(1.0, device=self.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
 
-        output = self.encoding((cv + 1)/2).float()
+        output = checkpoint(self.encoding.forward_in_chunks, (cv/2 + 1)/2, use_reentrant=True)
+        # output = self.encoding((cv/2 + 1)/2).float()
         output = output.reshape(-1, self.dim, self.L)
         scaling = torch.erf(erf_x)
         output = output * scaling
@@ -395,7 +406,8 @@ class TetOptimizer:
         return optim
 
     def regularizer(self):
-        l2_reg = 1e-6 * torch.linalg.norm(list(self.model.encoding.parameters())[0], ord=2)
+        return self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.encoding.embeddings])
+        # l2_reg = 1e-6 * torch.linalg.norm(list(self.model.encoding.parameters())[0], ord=2)
         # return l2_reg
         # split params
         param = list(self.model.encoding.parameters())[0]

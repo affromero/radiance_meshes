@@ -4,6 +4,22 @@ import math
 from delaunay_rasterization.internal.sort_by_keys import sort_by_keys_cub
 from icecream import ic
 
+def augment(v):
+    return torch.cat([v, torch.ones_like(v[:, :1])], dim=-1)
+
+def augmentT(v):
+    return torch.cat([v, torch.ones_like(v[:1])], dim=0)
+
+def point2image(vertices, viewmat, projection_matrix, cam_pos, eps=torch.finfo(torch.float32).eps):
+    cam_space_homo = viewmat @ augment(vertices).T
+    cam_space_nohomo = cam_space_homo[:2] / (cam_space_homo[2:3].abs() + 1e-10)
+    pixel_space = projection_matrix @ augmentT(cam_space_nohomo)
+    inv_distance  = 1 / torch.clip(cam_space_homo[2:3].T, eps, None)
+    # inv_distance  = 1 / torch.sqrt(
+    #     torch.clip(torch.sum((vertices - cam_pos.reshape(1, 3))**2, dim=1, keepdim=True), eps, None)
+    # )
+    return torch.cat([pixel_space[:2].T, inv_distance], dim=1)
+
 def ceil_div(x, y):
     return (x + y - 1) // y
 

@@ -99,6 +99,14 @@ float4 read_t4_float4(uint32_t idx, DiffTensorView t4)
                   t4[uint2(idx, 3)]);
 }
 
+float4 read_t4_float4(uint32_t idx, TensorView<float> t4)
+{
+    return float4(t4[uint2(idx, 0)],
+                  t4[uint2(idx, 1)],
+                  t4[uint2(idx, 2)],
+                  t4[uint2(idx, 3)]);
+}
+
 [Differentiable]
 float4 read_t2x2_float4(uint32_t idx, DiffTensorView t22)
 {
@@ -532,6 +540,18 @@ SplatTetrahedra load_tet_alphablend(int32_t g_idx,
     };
 }
 
+SplatTetrahedra load_tet_alphablend(int32_t g_idx,
+                                    TensorView<float> vertices,
+                                    TensorView<int32_t> indices,
+                                    TensorView<float> rgbs)
+{
+    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
+    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
+    return {
+        tet,
+        read_t4_float4(g_idx, rgbs)
+    };
+}
 /*
 [Differentiable]
 SplatTetrahedra load_tet_alphablend(int32_t g_idx,
@@ -583,10 +603,30 @@ struct CtrlPt: IDifferentiable {
 };
 
 [Differentiable]
+CtrlPt evaluate_tetra_2D(in SplatTetrahedra g, 
+                         no_diff in Camera cam,
+                         no_diff in float tmin,
+                         in float2 pixel_loc)
+{
+    float2 depth = ray_tetrahedron_intersect_2D(pixel_loc, tmin, g.tet);
+    // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
+    float dist = depth2distance(cam, pixel_loc, depth.x);
+    if (depth.x <= 0) {
+        return {{0.f, 0.f, 0.f, 0.f}, depth.y};
+    } else {
+        float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dist), 0, 1);
+        float4 rgba = {
+            alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
+        return {rgba, depth.y};
+    }
+}
+
+[Differentiable]
 CtrlPt evaluate_tetra(in SplatTetrahedra g, 
                       in float3 ray_o,
                       in float3 ray_d)
 {
+    // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
     // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
     float2 dist = ray_tetrahedron_intersect_fused(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
     if (dist.x <= 0) {
@@ -636,13 +676,25 @@ Ray get_ray(Camera cam, float2 center_pix_coord, float min_t) {
     float fy = cam.K[1][1];
     ray.d = mul(V, normalize(float3(
     // ray.d = normalize(float3(
-        (center_pix_coord.x + 0.5 - cam.K[0][2]) / fx,
-        (center_pix_coord.y + 0.5 - cam.K[1][2]) / fy,
+        (center_pix_coord.x - cam.K[0][2]) / fx,
+        (center_pix_coord.y - cam.K[1][2]) / fy,
         1.0
     )));
     
     ray.o = cam.position + ray.d * min_t;
     return ray;
+}
+
+[Differentiable]
+float depth2distance(Camera cam, float2 center_pix_coord, float depth) {
+    float fx = cam.K[0][0];
+    float fy = cam.K[1][1];
+    return depth * length(float3(
+    // ray.d = normalize(float3(
+        (center_pix_coord.x - cam.K[0][2]) / fx,
+        (center_pix_coord.y - cam.K[1][2]) / fy,
+        1.0
+    ));
 }
 
 bool is_point_inside_triangle(float2 p, Triangle2D tri) {
