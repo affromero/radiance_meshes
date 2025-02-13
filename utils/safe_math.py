@@ -290,29 +290,36 @@ def generate_safe_fn(forward_fn, backward_fn, x_min, x_max):
 
     return safe_fn
 
+# Define the forward function: y = x^exponent
+def forward_fn(x_clamped, exponent):
+    return x_clamped.pow(exponent)
 
-def safe_pow(x, exponent=0.5):
+# Define the backward function: dy/dx = exponent * x^(exponent - 1)
+def backward_fn(x_clamped, y, grad_output, exponent):
+    return grad_output * exponent * x_clamped.pow(exponent - 1)
+
+class SafePowFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, x_min, x_max, exponent):
+        x_clamped = torch.clamp(x, x_min, x_max)
+        y = forward_fn(x_clamped, exponent)
+        ctx.save_for_backward(x_clamped, y)
+        ctx.exponent = exponent
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_clamped, y = ctx.saved_tensors
+        exponent = ctx.exponent
+        grad_input = backward_fn(x_clamped, y, grad_output, exponent)
+        return grad_input, None, None, None
+
+def safe_pow(x, exponent:float=0.5, x_min:float=1e-6, x_max:float=1e6):
     """
     Safely compute x^exponent with:
-      - Forward pass clamping x in [tiny_val, max_val]
+      - Forward pass clamping x in [x_min, x_max]
       - Backward pass using derivative of x^exponent on the clamped input.
 
     Useful for exponents < 1 to avoid NaNs or infinities near x=0.
     """
-
-    # Define the forward function: y = x^exponent
-    def forward_fn(x_clamped):
-        return x_clamped.pow(exponent)
-
-    # Define the backward function: dy/dx = exponent * x^(exponent - 1)
-    # applied to the clamped x.
-    def backward_fn(x_clamped, y, grad_output):
-        # x^(exponent-1) can blow up if x_clamped is near zero; x_clamped is guaranteed >= tiny_val
-        return grad_output * exponent * x_clamped.pow(exponent - 1)
-
-    return generate_safe_fn(
-        forward_fn=forward_fn,
-        backward_fn=backward_fn,
-        x_min=tiny_val,
-        x_max=max_val,
-    )(x)
+    return SafePowFunction.apply(x, x_min, x_max, exponent)

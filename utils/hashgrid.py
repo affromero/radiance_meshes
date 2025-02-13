@@ -22,11 +22,12 @@
 
 import torch
 # torch.autograd.set_detect_anomaly(True)
-torch.autograd.set_detect_anomaly(False)
+# torch.autograd.set_detect_anomaly(True)
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import pdb
+from torch.autograd import Function
 
 BOX_OFFSETS = torch.tensor([[[i,j,k] for i in [0, 1] for j in [0, 1] for k in [0, 1]]],
                                device='cuda')
@@ -183,7 +184,7 @@ class HashEmbedderOptimized(nn.Module):
 
         # Embedding tables
         self.embeddings = nn.ModuleList([
-            nn.Embedding(2**log2_hashmap_size, n_features_per_level)
+            nn.Embedding(2**log2_hashmap_size, n_features_per_level, dtype=torch.bfloat16)
             for _ in range(n_levels)
         ])
 
@@ -217,8 +218,10 @@ class HashEmbedderOptimized(nn.Module):
         # coords must be long
         # We'll flatten last dim, do prime multiplication, XOR, then mask
         xor_result = coords[..., 0] * self.primes[0]
-        for i in range(1, coords.shape[-1]):
-            xor_result ^= coords[..., i] * self.primes[i]
+        xor_result ^= coords[..., 1] * self.primes[1]
+        xor_result ^= coords[..., 2] * self.primes[2]
+        # for i in range(1, coords.shape[-1]):
+        #     xor_result ^= coords[..., i] * self.primes[i]
 
         return xor_result & self.hash_mask
 
@@ -315,7 +318,7 @@ class HashEmbedderOptimized(nn.Module):
         # Concatenate along feature dim
         return torch.cat(x_embedded_all, dim=-1)
 
-    def forward_in_chunks(self, x, chunk_size=1048576):
+    def forward_in_chunks(self, x, chunk_size=548576):
     # def forward_in_chunks(self, x, chunk_size=65536):
         """
         Same as forward(), but processes 'x' in chunks to reduce memory usage.

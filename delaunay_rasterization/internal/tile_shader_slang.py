@@ -64,33 +64,8 @@ def vertex_and_tile_shader(indices,
         fovx,
         render_grid)
 
-    # inds, = torch.where(vs_tetra[:, 1] == 1)
-    # if len(inds) > 0:
-    #     min_tet_z = vs_tetra[inds[0], 2].clone()
-    #     z_val = vs_tetra[:, 2].clone()
-
-    #     behind_mask = z_val < min_tet_z
-    #     tiles_touched[behind_mask] = 0
-    #     rect_tile_space[behind_mask, :] = 0
-
-    #     offset = vs_tetra[~behind_mask, 2].min()
-    #     if offset < -1000:
-    #         ic(offset)
-    #     vs_tetra[:, 2] -= offset
-    #     vs_tetra[behind_mask, 2] = 0
-    # else:
-    #     offset = vs_tetra[:, 2].min()
-    #     if offset < -1000:
-    #         ic(offset)
-    #     vs_tetra[:, 2] -= offset
-
     with torch.no_grad():
-        # w = rect_tile_space[:, 2] - rect_tile_space[:, 0]
-        # h = rect_tile_space[:, 3] - rect_tile_space[:, 1]
-        # tiles_touched = w * h
         index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)
-        # ic(tiles_touched.long().sum(), tiles_touched.sum(), tiles_touched.max(), tiles_touched)
-        # ic(rect_tile_space, vs_tetra[:, 2], vertices)
         total_size_index_buffer = index_buffer_offset[-1]
         unsorted_keys = torch.zeros((total_size_index_buffer,), 
                                     device="cuda", 
@@ -98,9 +73,6 @@ def vertex_and_tile_shader(indices,
         unsorted_tetra_idx = torch.zeros((total_size_index_buffer,), 
                                          device="cuda", 
                                          dtype=torch.int32)
-        # ic(total_size_index_buffer, tiles_touched.max(), index_buffer_offset.max(), tiles_touched.long().sum())
-        # must be positive for key sort
-
         # slang_modules.tile_shader.generate_keys_smart(xyz_vs=vs_tetra,
         #                                         vertices=vertices,
         #                                         indices=indices,
@@ -136,11 +108,9 @@ def vertex_and_tile_shader(indices,
         )
 
         highest_tile_id_msb = (render_grid.grid_width*render_grid.grid_height).bit_length()
-        # torch.cuda.synchronize()
         sorted_keys, sorted_tetra_idx = sort_by_keys_cub.sort_by_keys(
             unsorted_keys, unsorted_tetra_idx, highest_tile_id_msb)
 
-        # torch.cuda.synchronize()
         tile_ranges = torch.zeros((render_grid.grid_height*render_grid.grid_width, 2), 
                                   device="cuda",
                                   dtype=torch.int32)
@@ -149,27 +119,6 @@ def vertex_and_tile_shader(indices,
                 blockSize=(256, 1, 1),
                 gridSize=(ceil_div(total_size_index_buffer, 256).item(), 1, 1)
         )
-        # s = (sorted_keys==0).sum()
-        # if s > 1:
-        #     tile_ranges[0, 0] = s-1
-        # torch.cuda.synchronize()
-        # ic(tlen.min(), tlen.max(), tlen.float().mean(), tile_ranges, sorted_keys)
-        # if tile_ranges[-1, 1] != total_size_index_buffer:
-        #     tlen = tile_ranges[:, 1] - tile_ranges[:, 0]
-        #     inds = torch.arange(sorted_keys.shape[0], device=sorted_keys.device)
-        #     ic(highest_tile_id_msb, (inds == sorted_keys.argsort()).all(), sorted_keys.shape, unsorted_keys.shape)
-        #     ic(render_grid.grid_height*render_grid.grid_width, sorted_keys[1] >> 32, sorted_keys[0] >> 32, sorted_keys[-2] >> 32, sorted_keys[-1] >> 32)
-        #     ic(sorted_keys.shape, tile_ranges[-1], total_size_index_buffer, sorted_keys.min(), sorted_keys.max())
-        #     ic(tile_ranges)
-        #     # tile_ranges[sorted_keys[-1] >> 32, 1] = total_size_index_buffer
-        #     ic(rect_tile_space.max())
-        #     last_tile_used = (sorted_keys[-1] >> 32)
-        #     tile_ranges[last_tile_used, 1] = total_size_index_buffer
-        #     # ic((torch.arange(test_ids.shape[0], device=test_ids.device) == test_ids).all(), torch.arange(test_ids.shape[0]), test_ids)
-        #     # ic(sorted_keys >> 32)
-        #     # ic(tile_ranges.shape, sorted_keys.shape, tile_ranges[-1], total_size_index_buffer)
-        #     # # ic(grid_size, grid_size*256)
-        #     print("issue with tile ranges")
 
     mask = tiles_touched > 0
     return sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, rect_tile_space, tet_area
@@ -190,9 +139,10 @@ class VertexShader(torch.autograd.Function):
         rect_tile_space = torch.zeros((n_tetra, 4), 
                                       device="cuda", 
                                       dtype=torch.int32)
-        tet_area = torch.ones((n_tetra), 
-                                device="cuda", 
-                                dtype=torch.float)
+        tet_area = None
+        # tet_area = torch.ones((n_tetra), 
+        #                         device="cuda", 
+        #                         dtype=torch.float)
         
         vs_tetra = torch.zeros((n_tetra, 3),
                                device="cuda",
@@ -211,7 +161,6 @@ class VertexShader(torch.autograd.Function):
                                                   out_rect_tile_space=rect_tile_space,
                                                   out_vs=vs_tetra,
                                                   out_circumcenter=circumcenter,
-                                                  out_tet_area=tet_area,
                                                   fovy=fovy,
                                                   fovx=fovx,
                                                   image_height=render_grid.image_height,

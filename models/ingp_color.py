@@ -23,6 +23,21 @@ from utils.graphics_utils import l2_normalize_th
 from typing import List
 from utils import hashgrid
 from torch.utils.checkpoint import checkpoint
+from torch.cuda.amp import autocast
+
+def forward_in_chunks(forward, x, chunk_size=548576):
+# def forward_in_chunks(self, x, chunk_size=65536):
+    """
+    Same as forward(), but processes 'x' in chunks to reduce memory usage.
+    """
+    outputs = []
+    start = 0
+    while start < x.shape[0]:
+        end = min(start + chunk_size, x.shape[0])
+        x_chunk = x[start:end]
+        outputs.append(forward(x_chunk))
+        start = end
+    return torch.cat(outputs, dim=0)
 
 def next_multiple(value, multiple):
     """Round `value` up to the nearest multiple of `multiple`."""
@@ -117,6 +132,18 @@ def init_weights(m, gain):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
+@torch.jit.script
+def pre_calc_cell_values(vertices, indices, center, scene_scaling: float, per_level_scale: float, L: int, scale_multi: float):
+    device = vertices.device
+    circumcenter, radius = calculate_circumcenters_torch(vertices[indices])
+    normalized = (circumcenter - center) / scene_scaling
+    cv, cr = contract_mean_std(normalized, radius / scene_scaling)
+    cr = cr * scale_multi
+    n = torch.arange(L, device=device).reshape(1, 1, -1)
+    erf_x = safe_div(torch.tensor(1.0, device=device), safe_sqrt(per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
+    scaling = torch.erf(erf_x)
+    return cv, scaling
+
 class Model:
     def __init__(self,
                  vertices: torch.Tensor,
@@ -144,13 +171,13 @@ class Model:
             per_level_scale=per_level_scale
         )
         self.per_level_scale = per_level_scale
-        # self.encoding = tcnn.Encoding(3, config).to(self.device)
+        self.encoding = tcnn.Encoding(3, config).to(self.device)
 
-        self.encoding = torch.compile(hashgrid.HashEmbedderOptimized(
-            [torch.zeros((3), device=self.device), torch.ones((3), device=self.device)],
-            self.L, n_features_per_level=self.dim,
-            log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
-            finest_resolution=base_resolution*per_level_scale**self.L)).to(self.device)
+        # self.encoding = torch.compile(hashgrid.HashEmbedderOptimized(
+        #     [torch.zeros((3), device=self.device), torch.ones((3), device=self.device)],
+        #     self.L, n_features_per_level=self.dim,
+        #     log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
+        #     finest_resolution=base_resolution*per_level_scale**self.L)).to(self.device)
 
 
         self.network = tcnn.Network(self.encoding.n_output_dims, 4, dict(
@@ -167,7 +194,6 @@ class Model:
         # ic(offsets, pred_total, total)
         # assert total == pred_total, f"Pred #params: {pred_total} vs {total}"
         resolution = grid_scale(L-1, per_level_scale, base_resolution)
-        ic(resolution)
         self.different_size = 0
         self.nominal_offset_size = offsets[-1] - offsets[-2]
         for o1, o2 in zip(offsets[:-1], offsets[1:]):
@@ -215,6 +241,7 @@ class Model:
         indices_np = indices_np.numpy()
         indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
         vertices = vertices[indices_np].mean(dim=1)
+        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
 
         # repeats = 3
         # vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
@@ -229,30 +256,34 @@ class Model:
         pass
 
     def update_triangulation(self):
-        v = Del(self.vertices.shape[0])
-        indices_np, prev = v.compute(self.vertices.detach().cpu())
+        verts = self.vertices
+        v = Del(verts.shape[0])
+        indices_np, prev = v.compute(verts.detach().cpu())
         indices_np = indices_np.numpy()
-        indices_np = indices_np[(indices_np < self.vertices.shape[0]).all(axis=1)]
+        indices_np = indices_np[(indices_np < verts.shape[0]).all(axis=1)]
         self.indices = torch.as_tensor(indices_np).cuda()
         
     def get_cell_values(self, camera: Camera, mask=None):
         indices = self.indices[mask] if mask is not None else self.indices
         vertices = self.vertices
-        circumcenter, radius = calculate_circumcenters_torch(vertices[indices])
-        normalized = (circumcenter - self.center) / self.scene_scaling
-        cv, cr = contract_mean_std(normalized, radius / self.scene_scaling)
-        cr = cr * self.scale_multi
-        n = torch.arange(self.L, device=self.device).reshape(1, 1, -1)
-        erf_x = safe_div(torch.tensor(1.0, device=self.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
+        # circumcenter, radius = calculate_circumcenters_torch(vertices[indices])
+        # normalized = (circumcenter - self.center) / self.scene_scaling
+        # cv, cr = contract_mean_std(normalized, radius / self.scene_scaling)
+        # cr = cr * self.scale_multi
+        # n = torch.arange(self.L, device=self.device).reshape(1, 1, -1)
+        # erf_x = safe_div(torch.tensor(1.0, device=self.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
+        # scaling = torch.erf(erf_x)
+        cv, scaling =  pre_calc_cell_values(
+            vertices, indices, self.center, self.scene_scaling, self.per_level_scale, self.L, self.scale_multi)
 
-        output = checkpoint(self.encoding.forward_in_chunks, (cv/2 + 1)/2, use_reentrant=True)
+        # output = checkpoint(self.encoding.forward_in_chunks, (cv/2 + 1)/2, use_reentrant=True).float()
+        # output = self.encoding((cv/2 + 1)/2).float()
+        output = forward_in_chunks(self.encoding, (cv/2 + 1)/2).float()
         # output = self.encoding((cv/2 + 1)/2).float()
         output = output.reshape(-1, self.dim, self.L)
-        scaling = torch.erf(erf_x)
         output = output * scaling
         output = self.network(output.reshape(-1, self.L * self.dim)).float()
 
-        # directions = l2_normalize_th(self.vertices - camera.camera_center.reshape(1, 3))
         features = torch.cat([
             torch.nn.functional.softplus(output[:, :3]), safe_exp(output[:, 3:4]+self.density_offset)], dim=1)
         return features
@@ -279,7 +310,6 @@ class TetOptimizer:
                  **kwargs):
         self.weight_decay = weight_decay
         self.optim = optim.CustomAdam([
-            # {"params": net.parameters(), "lr": 1e-3},
             {"params": model.encoding.parameters(), "lr": encoding_lr, "name": "encoding"},
         ], ignore_param_list=["encoding", "network"], eps=1e-15, betas=vertices_beta)
         self.net_optim = optim.CustomAdam([
@@ -341,9 +371,6 @@ class TetOptimizer:
     def split(self, clone_indices, split_mode):
         device = self.model.device
         clone_vertices = self.model.vertices[clone_indices]
-        # barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=self.model.device).clip(min=0.01, max=0.99)
-        # barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
-        # raw_new_vertex_location = (clone_vertices * barycentric_weights).sum(dim=1)
 
         if split_mode == "circumcenter":
             circumcenters, radius = topo_utils.calculate_circumcenters_torch(clone_vertices)
@@ -353,7 +380,6 @@ class TetOptimizer:
             r = torch.randn((clone_indices.shape[0], 1), device=self.model.device)
             r[r.abs() < 1e-2] = 1e-2
             sampled_radius = (r * self.split_std + 1) * radius
-            # new_vertex_location = l2_normalize_th(raw_new_vertex_location - circumcenters) * sampled_radius + circumcenters
             new_vertex_location = l2_normalize_th(sphere_loc) * sampled_radius + circumcenters
         elif split_mode == "barycentric":
             barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
@@ -361,34 +387,7 @@ class TetOptimizer:
             new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
         else:
             raise Exception(f"Split mode: {split_mode} not supported")
-        # new_s = (self.model.vertex_s_param[clone_indices] * barycentric_weights).sum(dim=1)
-        # new_rgb = (self.model.vertex_rgb_param[clone_indices] * barycentric_weights).sum(dim=1)
-        # new_sh = (self.model.vertex_sh_param[clone_indices] * barycentric_weights).sum(dim=1)
         self.add_points(new_vertex_location)
-
-    def track_gradients(self):
-        # grad = 
-        if self.vertex_rgbs_param_grad is not None:
-            self.vertex_rgbs_param_grad += self.model.vertex_rgbs_param.grad
-            self.vertex_grad += self.model.vertices.grad
-        else:
-            self.vertex_rgbs_param_grad = self.model.vertex_rgbs_param.grad
-            self.vertex_grad = self.model.vertices.grad
-
-        self.tracker_n += 1
-
-    def get_tracker_predicates(self):
-        if self.vertex_rgbs_param_grad is not None:
-            grads = self.vertex_rgbs_param_grad / self.tracker_n
-            vgrads = self.vertex_grad / self.tracker_n
-            return grads.abs().sum(dim=-1), vgrads.abs().sum(dim=-1)
-        else:
-            return torch.zeros((len(self.model)), dtype=bool, device=self.model.device), torch.zeros((len(self.model)), dtype=bool, device=self.model.device)
-
-    def reset_tracker(self):
-        self.tracker_n = 0
-        self.vertex_rgbs_param_grad = None
-        self.vertex_grad = None
 
     def main_step(self):
         self.optim.step()
@@ -406,7 +405,7 @@ class TetOptimizer:
         return optim
 
     def regularizer(self):
-        return self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.encoding.embeddings])
+        # return self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.encoding.embeddings])
         # l2_reg = 1e-6 * torch.linalg.norm(list(self.model.encoding.parameters())[0], ord=2)
         # return l2_reg
         # split params

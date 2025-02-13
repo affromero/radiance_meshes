@@ -65,8 +65,6 @@ def render_alpha_blend_tiles_slang_raw(indices, vertices,
         fovy,
         fovx)
     # torch.cuda.synchronize()
-    # dt2 = (time.time() - st)
-    # print(dt1, dt2, 1/(dt1+dt2))
     
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
@@ -166,7 +164,6 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         ladder_p = ctx.ladder_p
         pre_multi = ctx.pre_multi
 
-        indices_grad = torch.zeros_like(indices)
         vertices_grad = torch.zeros_like(vertices)
         rgbs_grad = torch.zeros_like(rgbs)
 
@@ -213,5 +210,5 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         # torch.cuda.synchronize()
         # ic("abb", time.time()-st)
         
-        return (None, None, indices_grad, vertices_grad, rgbs_grad, 
+        return (None, None, None, vertices_grad, rgbs_grad, 
                 None, None, None, None, None, None, None, None, None)

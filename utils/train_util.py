@@ -139,60 +139,48 @@ def safe_sin(x):
     return safe_trig_helper(x, torch.sin)
 
 
-def render(camera: Camera, model, cell_values=None, register_tet_hook=False, tile_size=16, min_t=0.1, pre_multi=500, ladder_p=-0.1, clip_multi=1e-4, **kwargs):
+def render(camera: Camera, model, cell_values=None, tile_size=16, min_t=0.1, pre_multi=500, ladder_p=-0.1, **kwargs):
     fy = fov2focal(camera.fovy, camera.image_height)
     fx = fov2focal(camera.fovx, camera.image_width)
     K = torch.tensor([
-    [fx, 0, camera.image_width/2],
-    [0, fy, camera.image_height/2],
-    [0, 0, 1],
+        [fx, 0, camera.image_width/2],
+        [0, fy, camera.image_height/2],
+        [0, 0, 1],
     ]).to(camera.world_view_transform.device)
-
-    cam_pos = camera.world_view_transform.T.inverse()[:3, 3]
-
-    # render_pkg = render_alpha_blend_tiles_slang_raw(model.indices, model.vertices, None,
-    #                                                 camera.world_view_transform.T, K, cam_pos,
-    #                                                 camera.fovy, camera.fovx, camera.image_height,
-    #                                                 camera.image_width, cell_values=cell_values,
-    #                                                 tile_size=tile_size)
+    cam_pos = camera.camera_center
+    vertices = model.vertices
     world_view_transform = camera.world_view_transform.T
-    torch.cuda.synchronize()
+
     assert(model.indices.device == model.vertices.device)
     assert(model.indices.device == world_view_transform.device)
     assert(model.indices.device == K.device)
     assert(model.indices.device == cam_pos.device)
-    st = time.time()
     
     render_grid = RenderGrid(camera.image_height,
                              camera.image_width,
                              tile_height=tile_size,
                              tile_width=tile_size)
-    with torch.no_grad():
-        sensitivity = topo_utils.compute_vertex_sensitivity(model.indices, model.vertices)
-        scaling = clip_multi/(sensitivity.reshape(-1, 1)+1e-5)
+    # with torch.no_grad():
+    #     sensitivity = topo_utils.compute_vertex_sensitivity(model.indices, model.vertices)
+    #     scaling = clip_multi/(sensitivity.reshape(-1, 1)+1e-5)
     # scale_vertices = train_util.ScaleGradients.apply(model.vertices, scaling)
     # scale_vertices = train_util.ClippedGradients.apply(model.vertices, scaling)
     sorted_tetra_idx, tile_ranges, vs_tetra, circumcenter, mask, _, tet_area = vertex_and_tile_shader(
         model.indices,
         # scale_vertices,
         # scale_vertices,
-        model.vertices,
-        model.vertices,
+        vertices,
+        vertices,
         world_view_transform,
         K,
         cam_pos,
         camera.fovy,
         camera.fovx,
         render_grid)
-    # world_view_transform.T @ model.vertices
     if cell_values is None:
         cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
         cell_values[mask] = model.get_cell_values(camera, mask)
-        # cell_values = model.get_cell_values(camera)
     # cell_values = model.get_cell_values(camera)
-    tet_grads = []
-    if register_tet_hook:
-        cell_values.register_hook(lambda d: tet_grads.append(d))
 
     # torch.cuda.synchronize()
     # ic("vt", time.time()-st)
@@ -202,7 +190,7 @@ def render(camera: Camera, model, cell_values=None, register_tet_hook=False, til
     except:
         pass
 
-    tet_vertices = model.vertices[model.indices]
+    # tet_vertices = vertices[model.indices]
     # verts_trans = point2image(model.vertices, world_view_transform, K, cam_pos)
     # st = time.time()
     image_rgb, distortion_img = AlphaBlendTiledRender.apply(
@@ -210,7 +198,7 @@ def render(camera: Camera, model, cell_values=None, register_tet_hook=False, til
         tile_ranges,
         model.indices,
         # tet_vertices,
-        model.vertices,
+        vertices,
         # verts_trans,
         cell_values,
         render_grid,
@@ -233,7 +221,6 @@ def render(camera: Camera, model, cell_values=None, register_tet_hook=False, til
         'viewspace_points': vs_tetra,
         'visibility_filter': mask,
         'circumcenters': circumcenter,
-        'tet_grad': tet_grads,
         'tet_area': tet_area,
     }
     return render_pkg

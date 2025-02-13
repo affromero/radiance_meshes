@@ -29,6 +29,8 @@ import json
 from utils import safe_math
 from delaunay_rasterization.internal.render_err import render_err
 import imageio
+from torch.profiler import profile, ProfilerActivity, record_function
+
 
 class CustomEncoder(json.JSONEncoder):
     def default(self, o):
@@ -40,7 +42,7 @@ class SimpleSampler:
     def __init__(self, total_num_samples, batch_size):
         self.total_num_samples = total_num_samples
         self.batch_size = batch_size
-        self.curr = total_num_samples
+        self.curr = 0
         self.ids = None
 
     def nextids(self, batch_size=None):
@@ -169,6 +171,15 @@ for train_ind in progress_bar:
 
     st = time.time()
     render_pkg = render(camera, model, min_t=model.scene_scaling * 0.1, **args.as_dict())
+    # render_pkg = render(camera, model, min_t=model.scene_scaling * 0.1, **args.as_dict())
+    # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    #          profile_memory=True, with_stack=True) as prof:
+    #     with record_function("model_inference"):
+    #         render_pkg = render(camera, model, min_t=model.scene_scaling * 0.1, **args.as_dict())
+
+    # print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_memory_usage", row_limit=10))
+    # prof.export_chrome_trace("trace.json")
+
     # torch.cuda.synchronize()
     # print(f'render: {(time.time()-st)}')
     image = render_pkg['render'].clip(min=0, max=1)
@@ -183,9 +194,6 @@ for train_ind in progress_bar:
     tet_optim.main_step()
     tet_optim.main_zero_grad()
 
-    if do_tracking:
-        tet_optim.track_gradients()
-
     if do_sh_step:
         tet_optim.sh_optim.step()
         tet_optim.sh_optim.zero_grad()
@@ -193,7 +201,7 @@ for train_ind in progress_bar:
     if do_delaunay:
         tet_optim.vertex_optim.step()
         tet_optim.vertex_optim.zero_grad()
-    # print(f'bw: {(time.time()-st)}')
+
     tet_optim.update_learning_rate(train_ind)
 
     if do_sh:
@@ -210,37 +218,16 @@ for train_ind in progress_bar:
         sampled_cameras = [train_cameras[i] for i in densification_sampler.nextids()]
         tet_rgbs_grad = torch.zeros((model.indices.shape[0]), device=device)
         for camera in sampled_cameras:
-
-            # render_pkg = render(camera, model, register_tet_hook=True, tile_size=args.tile_size)
-            # # torch.cuda.synchronize()
-            # # print(f'render: {(time.time()-st)}')
-            # image = render_pkg['render'].clip(min=0, max=1)
-            # l2_loss = ((target - image)**2).mean()
-            # ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
-            # loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss
-            # # loss = l2_loss
-        
-            # loss.backward()
-            # tet_grad = render_pkg['tet_grad'][0]
-
             with torch.no_grad():
-                tet_grad = render_err(target, camera, model, tile_size=args.tile_size, lambda_ssim=args.lambda_ssim)
-                # tet_rgbs_grad = update_rgbs(tet_rgbs_grad, tet_grad, render_pkg['tet_area'])
-
-                scores = tet_grad#.abs().sum(dim=-1)
-                if tet_rgbs_grad is None:
-                    tet_rgbs_grad = scores
-                else:
-                    tet_rgbs_grad = torch.maximum(scores, tet_rgbs_grad)
-            tet_optim.sh_optim.zero_grad()
-            tet_optim.optim.zero_grad()
-            tet_optim.vertex_optim.zero_grad()
-            torch.cuda.empty_cache()
-            # del scores, tet_grad, render_pkg
+                target = camera.original_image.cuda()
+                tet_grad, _ = render_err(target, camera, model, tile_size=args.tile_size, lambda_ssim=args.lambda_ssim)
+                tet_rgbs_grad = torch.maximum(tet_grad, tet_rgbs_grad)
+        torch.cuda.empty_cache()
 
         with torch.no_grad():
-            tensor_min, tensor_max = tet_rgbs_grad.min(), tet_rgbs_grad.max()
-            normalized_tensor = (tet_rgbs_grad - tensor_min) / (tensor_max - tensor_min)
+            render_tensor = torch.log(1+tet_rgbs_grad)
+            tensor_min, tensor_max = render_tensor.min(), render_tensor.max()
+            normalized_tensor = (render_tensor - tensor_min) / (tensor_max - tensor_min)
 
             # Convert to RGB (NxMx3) using the colormap
             tet_grad_color = torch.as_tensor(cmap(normalized_tensor.cpu().numpy())).float().cuda()
@@ -299,7 +286,6 @@ for train_ind in progress_bar:
     st = time.time()
     with torch.no_grad():
         if train_ind % 1 == 0:
-            train_ind = 1
             render_pkg = render(sample_camera, model, tile_size=args.tile_size)
             image = render_pkg['render']
             image = image.permute(1, 2, 0)
