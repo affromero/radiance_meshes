@@ -127,7 +127,7 @@ def test_tetrahedra_rendering(vertices, indices, vertex_color, tet_density, view
             return vertex_color, tet_density
     model.get_cell_values = get_cell_values
 
-    render_pkg = render(camera, model, tile_size=tile_size, min_t=tmin)
+    render_pkg = render(camera, model, tile_size=tile_size, min_t=tmin, ladder_p=1, pre_multi=1)
     torch_image = render_pkg['render'].permute(1, 2, 0)
     
     jax_image, extras = tetra_quad.render_camera(
@@ -138,7 +138,12 @@ def test_tetrahedra_rendering(vertices, indices, vertex_color, tet_density, view
         fx.item(), fy.item(), tmin, np.linspace(0, 1, n_samples))
 
     # Compare results
+    # ic(jax_image.shape, torch_image)
     torch_image_np = torch_image[..., :3].cpu().detach().numpy()
+    jax_dist_loss = np.asarray(jax_image[..., 4].mean())
+    jax_dist_img = np.asarray(jax_image[..., 4])
+    torch_dist_loss = render_pkg['distortion_loss'].cpu().detach().numpy()
+    torch_dist_img = render_pkg['distortion_img'].cpu().detach().numpy()
     diff = jax_image[..., :3] - torch_image_np
     mean_error = np.abs(diff).mean()
     max_error = np.abs(diff).max()
@@ -151,6 +156,10 @@ def test_tetrahedra_rendering(vertices, indices, vertex_color, tet_density, view
         'max_error': max_error,
         'extras': extras,
         'torch_extras': render_pkg,
+        'jax_dist_loss': jax_dist_loss,
+        'torch_dist_loss': torch_dist_loss,
+        'jax_dist_img': jax_dist_img,
+        'torch_dist_img': torch_dist_img,
         # 'vs_tetra': vs_tetra,
         # 'circumcenter': circumcenter,
         # 'rect_tile_space': rect_tile_space,
@@ -195,6 +204,7 @@ def test_tetrahedra_rendering(vertices, indices, vertex_color, tet_density, view
         results['jax_vertex_color_grad'] = np.array(jax_vertex_color_grad)
         results['jax_tet_density_grad'] = np.array(jax_tet_density_grad)
 
+        results['dist_loss_err'] = np.abs(results['torch_dist_loss'] - results['jax_dist_loss'])
         results['vertex_err'] = np.abs(results['torch_vertex_grad'] - results['jax_vertex_grad'])
         results['vertex_color_err'] = np.abs(results['torch_vertex_color_grad'] - results['jax_vertex_color_grad'])
         results['tet_density_err'] = np.abs(results['torch_tet_density_grad'] - results['jax_tet_density_grad'])

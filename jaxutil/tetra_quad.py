@@ -90,6 +90,7 @@ def render_quadrature(tdist, query_fn, return_extras=False):
             "tdist": tdist,
             "avg_colors": avg_colors,
             "weights": weights,
+            "dist_loss": dist_loss,
             "total_density": jnp.sum(total_density*t_delta, axis=-1),
         }
     else:

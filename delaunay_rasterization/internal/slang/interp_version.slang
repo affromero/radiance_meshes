@@ -75,14 +75,14 @@ CtrlPt evaluate_tetra_interp(
     float exit = dist.y;
     float enter = max(dist.x, t_min);
     float dt = max(dist.y - enter, 0.0f);
-    float intersection_t = enter + 0.5f * dt;
+    float intersection_t = 0.5*(exit+enter);
 
     if (!hit) {
-        return { (float4)(0.f, 0.f, 0.f, 0.f), intersection_t };
+        return { (float4)(0.f, 0.f, 0.f, 0.f), {enter, exit}, g.density };
     } else {
         float3x3 T = transpose(float3x3(verts[0] - verts[3], verts[1] - verts[3], verts[2] - verts[3]));
         float3 uvw_enter = SolveLinearSystem(T, enter * ray_d + ray_o - verts[3]);
-        float3 uvw_exit = SolveLinearSystem(T, dist.y * ray_d + ray_o - verts[3]);
+        float3 uvw_exit = SolveLinearSystem(T, exit * ray_d + ray_o - verts[3]);
 
         float w_enter = safe_clip(1.0 - uvw_enter.x - uvw_enter.y - uvw_enter.z, 0, 1);
         float w_exit = safe_clip(1.0 - uvw_exit.x - uvw_exit.y - uvw_exit.z, 0, 1);
@@ -100,7 +100,7 @@ CtrlPt evaluate_tetra_interp(
                        final_color.y,
                        final_color.z,
                        alpha};
-        return { rgba, intersection_t };
+        return { rgba, {enter, exit}, g.density };
     }
 }
 

@@ -14,12 +14,13 @@ def assert_valid_stepfun(t, y):
     )
 
 @jax.jit
-def lossfun_distortion(t, w):
+def lossfun_distortion(t, mass):
   """Compute iint w[i] w[j] |t[i] - t[j]| di dj."""
-  assert_valid_stepfun(t, w)
+  assert_valid_stepfun(t, mass)
 
   # The loss incurred between all pairs of intervals.
   ut = (t[Ellipsis, 1:] + t[Ellipsis, :-1]) / 2
+  w = mass / jnp.diff(t)
   dut = jnp.abs(ut[Ellipsis, :, None] - ut[Ellipsis, None, :])
   loss_inter = jnp.sum(w * jnp.sum(w[Ellipsis, None, :] * dut, axis=-1), axis=-1)
 

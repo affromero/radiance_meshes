@@ -12,6 +12,7 @@ import math
 
 key_pairs = [
     ('torch_image', 'jax_image', 'Image', 1e-1, 1e-1),
+    ('torch_dist_loss', 'jax_dist_loss', 'Distortion Loss', 1e-2, 1e-2),
     # ('torch_rgbs_grad', 'jax_rgbs_grad', 'RGB Sigma gradient', 1e-1, 1e-1)
 ]
 

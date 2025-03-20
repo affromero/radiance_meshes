@@ -11,7 +11,7 @@ def to_sphere(coordinates):
 
 @torch.jit.script
 def light_function(base_color, reflection_dirs, light_colors, light_roughness, view_dirs, eps:float=torch.finfo(torch.float32).eps):
-    similarity = (reflection_dirs * view_dirs).sum(dim=-1, keepdim=True)
+    similarity = ((reflection_dirs * view_dirs).sum(dim=-1, keepdim=True) + 1)/2
     mask = similarity > 0
     spec_intensity = torch.where(mask, (similarity.clip(min=eps) ** light_roughness), 0)
     spec_color = (light_colors * spec_intensity).sum(dim=1)

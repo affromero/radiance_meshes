@@ -22,9 +22,20 @@ static const uint TILE_WIDTH = PYTHON_TILE_WIDTH;
 groupshared SplatTetrahedra_interp collected_splats[TILE_HEIGHT * TILE_WIDTH];
 groupshared uint32_t collected_idx[TILE_HEIGHT * TILE_WIDTH];
 
+struct DistortionState5 : IDifferentiable {
+    float x;  // old_state.x
+    float y;  // old_state.y
+    float z;  // old_state.z
+    float w;  // old_state.w
+    float v;  // new 5th term, e.g., for w_i^2 * interval / 3, or anything else
+};
+
 [Differentiable]
 float tukey_power_ladder(float x, float p) {
   // Compute sign(x) * |p - 1|/p * ((|x|/|p-1| + 1)^p - 1)
+  if (p == 1) {
+    return x;
+  }
   let xp = abs(x);
   let xs = xp / max(TINY_VAL, abs(p - 1));
   let y = sign(x) * abs(p - 1) / p * (pow(xs + 1, p) - 1);
@@ -32,24 +43,64 @@ float tukey_power_ladder(float x, float p) {
 }
 
 [Differentiable]
-float4 update_distortion_state(float4 old_state, float weight, float midpoint, no_diff float pre_multi, no_diff float ladder_p) {
-    let m = tukey_power_ladder(midpoint * pre_multi, ladder_p);
-    float4 new_state;
-    new_state.x = old_state.x + 2 * weight * m * old_state.z;
-    new_state.y = old_state.y + 2 * weight * old_state.w;
-    new_state.z = old_state.z + weight;
-    new_state.w = old_state.w + weight * m;
+float moment_0_int(float a, float b, float s1) {
+    return safe_div((1 - safe_exp(s1*(a - b))),s1);
+}
+[Differentiable]
+float moment_1_int(float a, float b, float s1) {
+    return safe_div((a*s1 - (b*s1 + 1)*safe_exp(s1*(a - b)) + 1),s1*s1);
+}
+[Differentiable]
+float self_dist(float a, float b, float s) {
+    return safe_div((2*s*(a - b)*safe_exp(s*(a + 2*b)) + safe_exp(3*b*s) - safe_exp(s*(2*a + b)))*safe_exp(-3*b*s),s*s*s);
+}
+
+[Differentiable]
+DistortionState5 update_distortion_state(
+    DistortionState5 old_state,
+    float T,
+    float density,
+    float2 dist,
+    no_diff float pre_multi,
+    no_diff float ladder_p)
+{
+    float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
+
+    float m0 = T * moment_0_int(start, end, density);
+    float m1 = T * moment_1_int(start, end, density);
+
+    DistortionState5 new_state;
+    new_state.x = old_state.x + 2.0f * m1 * old_state.z;
+    new_state.y = old_state.y + 2.0f * m0 * old_state.w;
+    new_state.z = old_state.z + m0;
+    new_state.w = old_state.w + m1;
+    new_state.v = old_state.v + T * T * self_dist(start, end, density);
+
     return new_state;
 }
 
-float4 undo_distortion_state(float4 new_state, float weight, float midpoint, float pre_multi, float ladder_p) {
-    let m = tukey_power_ladder(midpoint * pre_multi, ladder_p);
-    float4 state;
-    state.z = new_state.z - weight;
-    state.w = new_state.w - weight * m;
-    state.x = new_state.x - 2 * weight * m * state.z;
-    state.y = new_state.y - 2 * weight * state.w;
-    return state;
+DistortionState5 undo_distortion_state(
+    DistortionState5 new_state,
+    float T,
+    float density,
+    float2 dist,
+    float pre_multi,
+    float ladder_p)
+{
+    float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
+
+    float m0 = T * moment_0_int(start, end, density);
+    float m1 = T * moment_1_int(start, end, density);
+
+    DistortionState5 old_state;
+    old_state.z = new_state.z - m0;
+    old_state.w = new_state.w - m1;
+    old_state.x = new_state.x - 2.0f * m1 * old_state.z;
+    old_state.y = new_state.y - 2.0f * m0 * old_state.w;
+    old_state.v = new_state.v - T * T * self_dist(start, end, density);
+    return old_state;
 }
 
 [Differentiable]
@@ -74,23 +125,23 @@ float4 undo_pixel_state(float4 pixel_state_t_n, float4 gauss_rgba_t_n)
 
 struct AlphaOut: IDifferentiable {
     float4 rgba;
-    float4 distortion_state;
+    DistortionState5 distortion_state;
 };
 
 [Differentiable]
 AlphaOut update_alpha_out(AlphaOut prev, CtrlPt ctrl, no_diff float pre_multi, no_diff float ladder_p) {
-    float weight = prev.rgba.a * ctrl.rgba.a;
+    float T = prev.rgba.a;
     return {
         update_pixel_state(prev.rgba, ctrl.rgba),
-        update_distortion_state(prev.distortion_state, weight, ctrl.t, pre_multi, ladder_p)
+        update_distortion_state(prev.distortion_state, T, ctrl.density, ctrl.dist, pre_multi, ladder_p)
     };
 }
 
 AlphaOut undo_alpha_out(AlphaOut curr, CtrlPt ctrl, no_diff float pre_multi, no_diff float ladder_p) {
-    float weight = curr.rgba.a * ctrl.rgba.a;
+    float T = curr.rgba.a;
     return {
         undo_pixel_state(curr.rgba, ctrl.rgba),
-        undo_distortion_state(curr.distortion_state, weight, ctrl.t, pre_multi, ladder_p)
+        undo_distortion_state(curr.distortion_state, T, ctrl.density, ctrl.dist, pre_multi, ladder_p)
     };
 }
 
@@ -117,7 +168,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
 {
     float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
     float4 curr_pixel_state = float4(0.f, 0.f, 0.f, 1.f);
-    float4 curr_distortion_state = float4(0.f, 0.f, 0.f, 0.f);
+    DistortionState5 curr_distortion_state = {0.f, 0.f, 0.f, 0.f, 0.f};
     AlphaOut ao = {
         curr_pixel_state, curr_distortion_state
     };
@@ -155,15 +206,9 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 local_n_contrib++;
                 SplatTetrahedra_interp g = collected_splats[j];
                 CtrlPt tetra_ctrl = evaluate_tetra_interp(g, ray.o, ray.d, min_t);
-                // CtrlPt tetra_ctrl = evaluate_tetra_2D(g, cam, min_t, center_pix_coord);
-                // if (tetra_ctrl.rgba.a < 1/255.f) continue;
-                // if (true) {
-                //     printf("tetra rgba: %f, %f, %f, %f\n",
-                //     tetra_ctrl.rgba.x, tetra_ctrl.rgba.y, tetra_ctrl.rgba.z, tetra_ctrl.rgba.w);
-                // }
-
                 AlphaOut new_ao = update_alpha_out(ao, tetra_ctrl, pre_multi, ladder_p);
                 ao = new_ao;
+
 
                 // float4 new_rgba = update_pixel_state(ao.rgba, tetra_ctrl.rgba);
                 // ao.rgba = new_rgba;
@@ -219,13 +264,15 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     int64_t current_splat_offset = tile_idx_end - tile_idx_start;
 
-    float4 current_pixel_state, curr_distortion_state;
+    float4 current_pixel_state;
+    DistortionState5 curr_distortion_state;
     int32_t n_contrib_fwd;
     if (is_inside) {
-        curr_distortion_state = float4(final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)],
-                                       final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1)],
-                                       final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2)],
-                                       final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3)]);
+        curr_distortion_state = {final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)],
+                                 final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1)],
+                                 final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2)],
+                                 final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3)],
+                                 final_distortion_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 4)]};
         current_pixel_state = float4(final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0)],
                                      final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1)],
                                      final_pixel_state[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2)],
@@ -350,10 +397,11 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
       output_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1), pixel_states.rgba.g);
       output_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2), pixel_states.rgba.b);
       output_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3), pixel_states.rgba.a);
-      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0), pixel_states.distortion_state.r);
-      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1), pixel_states.distortion_state.g);
-      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2), pixel_states.distortion_state.b);
-      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3), pixel_states.distortion_state.a);
+      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 0), pixel_states.distortion_state.x);
+      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 1), pixel_states.distortion_state.y);
+      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 2), pixel_states.distortion_state.z);
+      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 3), pixel_states.distortion_state.w);
+      distortion_img.storeOnce(uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), 4), pixel_states.distortion_state.v);
     }
 }
 

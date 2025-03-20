@@ -83,7 +83,7 @@ AlphaOut update_alpha_out(AlphaOut prev, CtrlPt ctrl, no_diff float pre_multi, n
     float weight = prev.rgba.a * ctrl.rgba.a;
     return {
         update_pixel_state(prev.rgba, ctrl.rgba),
-        update_distortion_state(prev.distortion_state, weight, ctrl.t, pre_multi, ladder_p)
+        update_distortion_state(prev.distortion_state, weight, ctrl.dist.x, pre_multi, ladder_p)
     };
 }
 
@@ -91,7 +91,7 @@ AlphaOut undo_alpha_out(AlphaOut curr, CtrlPt ctrl, no_diff float pre_multi, no_
     float weight = curr.rgba.a * ctrl.rgba.a;
     return {
         undo_pixel_state(curr.rgba, ctrl.rgba),
-        undo_distortion_state(curr.distortion_state, weight, ctrl.t, pre_multi, ladder_p)
+        undo_distortion_state(curr.distortion_state, weight, ctrl.dist.x, pre_multi, ladder_p)
     };
 }
 

@@ -13,7 +13,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
                 world_view_transform, K, cam_pos, pre_multi, ladder_p, min_t,
                 fovy, fovx, device="cuda"):
         distortion_img = torch.zeros((render_grid.image_height, 
-                                  render_grid.image_width, 4), 
+                                  render_grid.image_width, 5), 
                                  device=device)
         output_img = torch.zeros((render_grid.image_height, 
                                   render_grid.image_width, 4), 

@@ -600,27 +600,28 @@ SplatTetrahedra load_tet_alphablend(int32_t g_idx,
 
 struct CtrlPt: IDifferentiable {
     float4 rgba;
-    float t;
+    float2 dist;
+    float density;
 };
 
-[Differentiable]
-CtrlPt evaluate_tetra_2D(in SplatTetrahedra g, 
-                         no_diff in Camera cam,
-                         no_diff in float tmin,
-                         in float2 pixel_loc)
-{
-    float2 depth = ray_tetrahedron_intersect_2D(pixel_loc, tmin, g.tet);
-    // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
-    float dist = depth2distance(cam, pixel_loc, depth.x);
-    if (depth.x <= 0) {
-        return {{0.f, 0.f, 0.f, 0.f}, depth.y};
-    } else {
-        float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dist), 0, 1);
-        float4 rgba = {
-            alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
-        return {rgba, depth.y};
-    }
-}
+// [Differentiable]
+// CtrlPt evaluate_tetra_2D(in SplatTetrahedra g, 
+//                          no_diff in Camera cam,
+//                          no_diff in float tmin,
+//                          in float2 pixel_loc)
+// {
+//     float2 depth = ray_tetrahedron_intersect_2D(pixel_loc, tmin, g.tet);
+//     // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
+//     float dist = depth2distance(cam, pixel_loc, depth.x);
+//     if (depth.x <= 0) {
+//         return {{0.f, 0.f, 0.f, 0.f}, depth.y};
+//     } else {
+//         float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dist), 0, 1);
+//         float4 rgba = {
+//             alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
+//         return {rgba, depth.y};
+//     }
+// }
 
 [Differentiable]
 CtrlPt evaluate_tetra(in SplatTetrahedra g, 
@@ -637,12 +638,12 @@ CtrlPt evaluate_tetra(in SplatTetrahedra g,
     float dt = max(abs(dist.y - dist.x), 0.0f);
     // float2 dist = cyrusBeckTetrahedronShearScale(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
     if (!hit) {
-        return {{0.f, 0.f, 0.f, 0.f}, intersection_t};
+        return {{0.f, 0.f, 0.f, 0.f}, dist, g.rgbs.w};
     } else {
         float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dt), 0, 1);
         float4 rgba = {
             alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
-        return {rgba, intersection_t};
+        return {rgba, dist, g.rgbs.w};
     }
 }
 

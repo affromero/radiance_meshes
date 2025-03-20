@@ -12,6 +12,7 @@ torch.set_printoptions(precision=32)
 
 key_pairs = [
     ('torch_image', 'jax_image', 'Image', 1e-1, 1e-1),
+    ('torch_dist_loss', 'jax_dist_loss', 'Distortion Loss', 1e-2, 1e-2),
     # vertex grad is not checked because it is 0 when using quadrature
     # ('torch_vertex_grad', 'jax_vertex_grad', 'Vertex gradient', 1e-1, 1e-1),
     # ('torch_rgbs_grad', 'jax_rgbs_grad', 'RGB Sigma gradient', 1e-1, 1e-1)
@@ -52,27 +53,27 @@ class TetrahedraRenderingTest(parameterized.TestCase):
         compare_dict_values(results, results2, key_pairs, vertices, viewmat)
 
 
-    # @parameterized.product(
-    #     # tile_size=[4, 8, 16],
-    #     radius=[0.05, 0.1, 0.2, 0.4],
-    # )
-    # def test_center_view(self, tile_size=8, N=20, radius=100):
-    #     """Test rendering from random center with random rotation."""
-    #     for i in range(N):
-    #         vertices = self._create_base_tetrahedra(radius)
+    @parameterized.product(
+        # tile_size=[4, 8, 16],
+        radius=[0.05, 0.1, 0.2, 0.4],
+    )
+    def test_center_view(self, tile_size=8, N=20, radius=100):
+        """Test rendering from random center with random rotation."""
+        for i in range(N):
+            vertices = self._create_base_tetrahedra(radius)
             
-    #         # Generate barycentric point
-    #         barycentric = torch.rand(4).cuda()
-    #         barycentric = barycentric / barycentric.sum()
-    #         origin = vertices[self.indices[0]].T @ barycentric
+            # Generate barycentric point
+            barycentric = torch.rand(4).cuda()
+            barycentric = barycentric / barycentric.sum()
+            origin = vertices[self.indices[0]].T @ barycentric
             
-    #         # Create view matrix with random rotation
-    #         viewmat = torch.eye(4).cuda()
-    #         viewmat[:3, :3] = self._random_rotation_matrix()
-    #         viewmat[:3, 3] = origin
-    #         viewmat = torch.linalg.inv(viewmat)
+            # Create view matrix with random rotation
+            viewmat = torch.eye(4).cuda()
+            viewmat[:3, :3] = self._random_rotation_matrix()
+            viewmat[:3, 3] = origin
+            viewmat = torch.linalg.inv(viewmat)
             
-    #         self.run_test(vertices, viewmat, tile_size)
+            self.run_test(vertices, viewmat, tile_size)
 
     # @parameterized.product(
     #     offset_mag=[0.1, 1, 5],

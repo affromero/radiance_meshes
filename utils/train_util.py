@@ -10,6 +10,7 @@ from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_sh
 import numpy as np
 from utils import topo_utils, train_util
 from icecream import ic
+import math
 
 def sample_uniform_in_sphere(batch_size, dim, radius=1.0, device=None):
     """
@@ -207,12 +208,12 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         world_view_transform,
         K,
         cam_pos,
-        pre_multi,# / model.scene_scaling,
+        pre_multi,
         ladder_p,
         min_t,
         camera.fovy,
         camera.fovx)
-    distortion_loss = (distortion_img[:, :, 0] - distortion_img[:, :, 1])
+    distortion_loss = (distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4]
     # torch.cuda.synchronize()
     # dt2 = (time.time() - st)
     # print(dt1, dt2, 1/(dt1+dt2))
@@ -220,7 +221,8 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
     
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
-        'distortion_img': distortion_loss,
+        'alpha': image_rgb.permute(2,0,1)[3, ...],
+        'distortion_img': distortion_img,
         'distortion_loss': distortion_loss.mean(),
         'viewspace_points': vs_tetra,
         'visibility_filter': mask,
@@ -263,3 +265,14 @@ def get_expon_lr_func(
         return delay_rate * log_lerp
 
     return helper
+
+
+def pad_hw2even(h, w):
+    return int(math.ceil(h / 2))*2, int(math.ceil(w / 2))*2
+
+def pad_image2even(im, fnp=np):
+    h, w = im.shape[:2]
+    nh, nw = pad_hw2even(h, w)
+    im_full = fnp.zeros((nh, nw, 3), dtype=im.dtype)
+    im_full[:h, :w] = im
+    return im_full

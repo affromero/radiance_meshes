@@ -29,6 +29,7 @@ import numpy as np
 from utils.args import Args
 import tinyplypy
 from utils.phong_shading import to_sphere, activate_lights, light_function, compute_vert_color
+from sh_slang.eval_sh import eval_sh
 
 def init_weights(m, gain):
     if isinstance(m, nn.Linear):
@@ -156,19 +157,26 @@ class Model(nn.Module):
             "x": xyz[:, 0],
             "y": xyz[:, 1],
             "z": xyz[:, 2],
-            "r": rgb[:, 0],
-            "g": rgb[:, 1],
-            "b": rgb[:, 2],
+            # "r": rgb[:, 0],
+            # "g": rgb[:, 1],
+            # "b": rgb[:, 2],
         }
-        vertex_lights = self.vertex_lights.detach().cpu().numpy().astype(np.float32)
-        for i in range(self.num_lights):
-            offset = i*6
-            vertex_dict[f"l{i}_r"]         = np.ascontiguousarray(vertex_lights[:, offset + 0])
-            vertex_dict[f"l{i}_g"]         = np.ascontiguousarray(vertex_lights[:, offset + 1])
-            vertex_dict[f"l{i}_b"]         = np.ascontiguousarray(vertex_lights[:, offset + 2])
-            vertex_dict[f"l{i}_roughness"] = np.ascontiguousarray(vertex_lights[:, offset + 3])
-            vertex_dict[f"l{i}_phi"]       = np.ascontiguousarray(vertex_lights[:, offset + 4])
-            vertex_dict[f"l{i}_theta"]     = np.ascontiguousarray(vertex_lights[:, offset + 5])
+        vertex_dict[f"sh_{0}_r"] = np.ascontiguousarray(rgb[:, 0])
+        vertex_dict[f"sh_{0}_g"] = np.ascontiguousarray(rgb[:, 1])
+        vertex_dict[f"sh_{0}_b"] = np.ascontiguousarray(rgb[:, 2])
+        vertex_lights = self.vertex_lights.detach().cpu().numpy().astype(np.float32).reshape(-1, (self.num_lights+1)**2 - 1, 3)
+        for i in range(vertex_lights.shape[1]):
+            vertex_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(vertex_lights[:, i, 0])
+            vertex_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(vertex_lights[:, i, 1])
+            vertex_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(vertex_lights[:, i, 2])
+        # for i in range(self.num_lights):
+        #     offset = i*6
+        #     vertex_dict[f"l{i}_r"]         = np.ascontiguousarray(vertex_lights[:, offset + 0])
+        #     vertex_dict[f"l{i}_g"]         = np.ascontiguousarray(vertex_lights[:, offset + 1])
+        #     vertex_dict[f"l{i}_b"]         = np.ascontiguousarray(vertex_lights[:, offset + 2])
+        #     vertex_dict[f"l{i}_roughness"] = np.ascontiguousarray(vertex_lights[:, offset + 3])
+        #     vertex_dict[f"l{i}_phi"]       = np.ascontiguousarray(vertex_lights[:, offset + 4])
+        #     vertex_dict[f"l{i}_theta"]     = np.ascontiguousarray(vertex_lights[:, offset + 5])
 
         # 2. Compute your RGBA / lighting data per tetrahedron
         #    (same logic as in your code: iterative chunking, gather, etc.)
@@ -184,6 +192,7 @@ class Model(nn.Module):
             output = self.compute_batch_features(vertices, indices, start, end)
             density = torch.exp(output[:, 0] + self.density_offset)
             densities[start:end] = density.cpu().numpy().astype(np.float32)
+        densities = np.where(self.boundary_tets.cpu().numpy(), 1000, densities)
 
         # 3. Build the dictionary for your "tetrahedron" element
         #    'vertex_indices' is a 2D array (N,4) for the tetra indices
@@ -234,24 +243,25 @@ class Model(nn.Module):
         scaling = torch.linalg.norm(ccenters - center.reshape(1, 3), dim=1, ord=torch.inf).max()
         # ic(center1, center, scaling1, scaling)
 
-        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
-        v = Del(vertices.shape[0])
-        indices_np, prev = v.compute(vertices.detach().cpu())
-        indices_np = indices_np.numpy()
-        indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
-        vertices = vertices[indices_np].mean(dim=1)
-        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
+        # vertices = vertices + torch.randn(*vertices.shape) * 1e-3
+        # v = Del(vertices.shape[0])
+        # indices_np, prev = v.compute(vertices.detach().cpu())
+        # indices_np = indices_np.numpy()
+        # indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
+        # vertices = vertices[indices_np].mean(dim=1)
+        # vertices = vertices + torch.randn(*vertices.shape) * 1e-3
 
-        # repeats = 3
-        # vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
-        # vertices = vertices + torch.randn(*vertices.shape) * 1e-1
-        # vertices = vertices.reshape(-1, 3)
+        repeats = 3
+        vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
+        vertices = vertices + torch.randn(*vertices.shape) * 1e-1
+        vertices = vertices.reshape(-1, 3)
 
-        # vertex_base_color = torch.as_tensor(point_cloud.colors).float().to(device)
-        # vertex_base_color = vertex_base_color.reshape(-1, 1, 3).expand(-1, repeats, 3).reshape(-1, 3)
+        vertex_base_color = RGB2SH(torch.as_tensor(point_cloud.colors).float().to(device))
+        vertex_base_color = vertex_base_color.reshape(-1, 1, 3).expand(-1, repeats, 3).reshape(-1, 3)
 
-        vertex_base_color = torch.ones_like(vertices, device=device) * 0.1
-        vertex_lights = torch.zeros((vertices.shape[0], num_lights*6)).to(device)
+        # vertex_base_color = torch.ones_like(vertices, device=device) * 0.1
+        # vertex_lights = torch.zeros((vertices.shape[0], num_lights*6)).to(device)
+        vertex_lights = torch.zeros((vertices.shape[0], ((num_lights+1)**2-1)*3)).to(device)
 
         vertices = nn.Parameter(vertices.cuda())
         model = Model(vertices, vertex_base_color, vertex_lights, center, scaling, num_lights=num_lights, **kwargs)
@@ -265,13 +275,11 @@ class Model(nn.Module):
             vertices, indices[start:end], self.center, self.scene_scaling,
             self.per_level_scale, self.L, self.scale_multi, self.base_resolution)
         x = (cv/2 + 1)/2
-        # output = self.encoding(x)
         output = checkpoint(self.encoding, x, use_reentrant=True).float()
         output = output.reshape(-1, self.dim, self.L)
 
         output = output * scaling
         output = checkpoint(self.network, output.reshape(-1, self.L * self.dim), use_reentrant=True)
-        # output = self.network(output.reshape(-1, self.L * self.dim))
         return output
 
     def update_triangulation(self, alpha_threshold=1.0/255):
@@ -331,23 +339,28 @@ class Model(nn.Module):
         vertices = self.vertices
         boundary_tets = self.boundary_tets[mask] if mask is not None else self.boundary_tets
 
-        # densities = torch.empty((indices.shape[0]), device=self.device)
-        densities = []
+        densities = torch.empty((indices.shape[0]), device=self.device)
+        # densities = []
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
             output = self.compute_batch_features(vertices, indices, start, end)
             density = safe_exp(output[:, 0]+self.density_offset)
-            # densities[start:end] = density
-            densities.append(density)
-        densities = torch.cat(densities, dim=0)
-        # densities[boundary_tets] = 1000
+            densities[start:end] = density
+            # densities.append(density)
+        # densities = torch.cat(densities, dim=0)
         densities = torch.where(boundary_tets, 1000, densities)
-        vertex_color = compute_vert_color(
-            self.vertex_base_color, self.vertex_lights.reshape(-1, self.num_lights, 6)[:, :self.max_lights],
-            vertices, camera.camera_center, self.light_offset, self.dir_offset[:self.max_lights])
+
+        vertex_color_raw = eval_sh(
+            vertices,
+            self.vertex_base_color,
+            self.vertex_lights.reshape(-1, (self.num_lights+1)**2 - 1, 3),
+            camera.camera_center,
+            self.max_lights)
+        vertex_color = torch.nn.functional.softplus(vertex_color_raw, beta=10)
+        # vertex_color = compute_vert_color(
+        #     self.vertex_base_color, self.vertex_lights.reshape(-1, self.num_lights, 6)[:, :self.max_lights],
+        #     vertices, camera.camera_center, self.light_offset, self.dir_offset[:self.max_lights])
         return vertex_color, densities
-        # ic(self.vertex_base_color, self.vertex_base_color.grad, self.contracted_vertices.grad)
-        # return self.vertex_base_color, densities
 
     def __len__(self):
         return self.vertices.shape[0]
@@ -373,6 +386,7 @@ class TetOptimizer:
                  split_std: float = 0.5,
                  vertices_beta: List[float] = [0.9, 0.99],
                  lr_delay: int = 500,
+                 sh_lr_delay: int = 1000,
                  **kwargs):
         self.weight_decay = weight_decay
         self.optim = optim.CustomAdam([
@@ -400,30 +414,30 @@ class TetOptimizer:
         self.net_scheduler_args = get_expon_lr_func(lr_init=network_lr,
                                                 lr_final=final_network_lr,
                                                 lr_delay_mult=1e-8,
-                                                lr_delay_steps=lr_delay,
+                                                lr_delay_steps=500,
                                                 max_steps=max_steps)
         self.encoder_scheduler_args = get_expon_lr_func(lr_init=encoding_lr,
                                                 lr_final=final_encoding_lr,
                                                 lr_delay_mult=1e-8,
-                                                lr_delay_steps=lr_delay,
+                                                lr_delay_steps=500,
                                                 max_steps=max_steps)
         self.vertex_scheduler_args = get_expon_lr_func(lr_init=self.vert_lr_multi*vertices_lr,
                                                 lr_final=self.vert_lr_multi*final_vertices_lr,
                                                 lr_delay_mult=vertices_lr_delay_multi,
                                                 max_steps=max_steps,
                                                 lr_delay_steps=lr_delay)
-        self.color_scheduler_args = get_expon_lr_func(
-            lr_init=color_lr,
-            lr_final=final_color_lr,
-            # lr_delay_mult=1e-8,
-            lr_delay_steps=0,
-            max_steps=max_steps
-        )
+        # self.color_scheduler_args = get_expon_lr_func(
+        #     lr_init=color_lr,
+        #     lr_final=final_color_lr,
+        #     # lr_delay_mult=1e-8,
+        #     lr_delay_steps=0,
+        #     max_steps=max_steps
+        # )
         self.lights_scheduler_args = get_expon_lr_func(
             lr_init=lights_lr,
             lr_final=final_lights_lr,
             # lr_delay_mult=1e-8,
-            lr_delay_steps=0,
+            lr_delay_steps=sh_lr_delay,
             max_steps=max_steps
         )
 
@@ -441,17 +455,17 @@ class TetOptimizer:
             if param_group["name"] == "contracted_vertices":
                 lr = self.vertex_scheduler_args(iteration)
                 param_group['lr'] = lr
-        # Base color
-        for param_group in self.base_color_optim.param_groups:
-            if param_group["name"] == "base_color":
-                lr = self.color_scheduler_args(iteration)
-                param_group['lr'] = lr
+        # # Base color
+        # for param_group in self.base_color_optim.param_groups:
+        #     if param_group["name"] == "base_color":
+        #         lr = self.color_scheduler_args(iteration)
+        #         param_group['lr'] = lr
 
-        # Lights
-        for param_group in self.lights_optim.param_groups:
-            if param_group["name"] == "vertex_lights":
-                lr = self.lights_scheduler_args(iteration)
-                param_group['lr'] = lr
+        # # Lights
+        # for param_group in self.lights_optim.param_groups:
+        #     if param_group["name"] == "vertex_lights":
+        #         lr = self.lights_scheduler_args(iteration)
+        #         param_group['lr'] = lr
 
     def remove_points(self, mask: torch.Tensor):
         new_tensors = self.optim.prune_optimizer(mask)
