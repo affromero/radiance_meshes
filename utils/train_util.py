@@ -225,8 +225,8 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
         'alpha': image_rgb.permute(2,0,1)[3, ...],
-        'distortion_img': distortion_img,
-        'distortion_loss': distortion_loss.mean(),
+        'distortion_img': -distortion_img,
+        'distortion_loss': -distortion_loss.mean(),
         'viewspace_points': vs_tetra,
         'visibility_filter': mask,
         'circumcenters': circumcenter,

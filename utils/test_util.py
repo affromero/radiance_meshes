@@ -119,7 +119,7 @@ def psnr(img1, img2):
     mse = (((img1 - img2)) ** 2).reshape(img1.shape[0], -1).mean(1, keepdim=True)
     return 20 * torch.log10(1.0 / torch.sqrt(mse))
 
-def evaluate_and_save(model, test_cameras, output_path, tile_size):
+def evaluate_and_save(model, test_cameras, output_path, tile_size, min_t):
     gt_path = os.path.join(output_path, "images", "gt")
     pred_path = os.path.join(output_path, "images", "pred")
     os.makedirs(gt_path, exist_ok=True)
@@ -136,7 +136,7 @@ def evaluate_and_save(model, test_cameras, output_path, tile_size):
         for idx, camera in enumerate(tqdm(cameras, desc=f"Rendering {split} set")):
             with torch.no_grad():
                 with torch.no_grad():
-                    render_pkg = render(camera, model, tile_size=tile_size)
+                    render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
                 image = render_pkg['render'].clip(min=0, max=1).unsqueeze(0)
                 # image = image.permute(1, 2, 0).detach()
                 

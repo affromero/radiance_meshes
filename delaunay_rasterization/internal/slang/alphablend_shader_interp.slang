@@ -62,6 +62,10 @@ float self_dist(float a, float b, float s) {
     // return safe_div((2*s*(a - b)*safe_exp(s*(a + 2*b)) + safe_exp(3*b*s) - safe_exp(s*(2*a + b)))*safe_exp(-3*b*s),s*s*s);
 }
 
+float scale_dist(float x) {
+    return safe_div(1.f, 1+safe_exp(x-3));
+}
+
 [Differentiable]
 DistortionState5 update_distortion_state(
     DistortionState5 old_state,
@@ -71,15 +75,14 @@ DistortionState5 update_distortion_state(
     no_diff float pre_multi,
     no_diff float ladder_p)
 {
-    float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
-    float scaling = 1;//safe_div(end-start, dist.y-dist.x);
+    // float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    // float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
+    float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    float end = dist.y;//tukey_power_ladder(dist.y*pre_multi, ladder_p);
+    float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
 
-    float m0 = T * moment_0_int(start, end, density*scaling);
+    float m0 = T * moment_0_int(start, end, density);
     float m1 = T * moment_1_int(start, end, density*scaling);
-    if (abs(m0) > 1e6){
-        printf("(%f,%f,%f,%f,%f)", m0, m1, start, end, density);
-    }
 
     DistortionState5 new_state;
     new_state.x = old_state.x + 2.0f * m1 * old_state.z;
@@ -99,21 +102,24 @@ DistortionState5 undo_distortion_state(
     float pre_multi,
     float ladder_p)
 {
-    float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
+    // float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    // float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
     // float start = dist.x;
     // float end = dist.y;
-    float scaling = 1;//safe_div(end-start, dist.y-dist.x);
+    float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
+    float end = dist.y;//tukey_power_ladder(dist.y*pre_multi, ladder_p);
+    // float scaling = scale_dist((dist.x+dist.y)*0.5);
+    float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
 
-    float m0 = T * moment_0_int(start, end, density*scaling);
-    float m1 = T * moment_1_int(start, end, density*scaling);
+    float m0 = T * moment_0_int(start, end, density)*scaling;
+    float m1 = T * moment_1_int(start, end, density)*scaling;
 
     DistortionState5 old_state;
     old_state.z = new_state.z - m0;
     old_state.w = new_state.w - m1;
     old_state.x = new_state.x - 2.0f * m1 * old_state.z;
     old_state.y = new_state.y - 2.0f * m0 * old_state.w;
-    old_state.v = new_state.v - T * T * self_dist(start, end, density*scaling);
+    old_state.v = new_state.v - T * T * self_dist(start, end, density)*scaling;
     return old_state;
 }
 

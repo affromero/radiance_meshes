@@ -123,6 +123,7 @@ args.pre_multi = 10000
 args.split_std = 0.1
 args.split_mode = "barycentric"
 args.clone_schedule = "quadratic"
+args.base_min_t = 0.2
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
@@ -137,6 +138,8 @@ device = torch.device('cuda')
 model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
                             max_lights = args.num_lights if args.sh_interval <= 0 else 0,
                             **args.as_dict())
+min_t = model.scene_scaling * args.base_min_t
+
 tet_optim = TetOptimizer(model, **args.as_dict())
 sample_camera = test_cameras[3]
 
@@ -189,7 +192,7 @@ for iteration in progress_bar:
 
     st = time.time()
     bg = 0
-    render_pkg = render(camera, model, bg=bg, min_t=0.2, **args.as_dict())
+    render_pkg = render(camera, model, bg=bg, min_t=min_t, **args.as_dict())
     # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
     #          profile_memory=True, with_stack=True) as prof:
     #     with record_function("model_inference"):
@@ -228,7 +231,7 @@ for iteration in progress_bar:
     # st = time.time()
     with torch.no_grad():
         if iteration % 10 == 0:
-            render_pkg = render(sample_camera, model, tile_size=args.tile_size)
+            render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
             sample_image = render_pkg['render']
             sample_image = sample_image.permute(1, 2, 0)
             sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
@@ -297,7 +300,7 @@ for iteration in progress_bar:
                 binary_color[clone_mask, 0] = normalized_tensor[clone_mask]
                 binary_color[~clone_mask, 1] = normalized_tensor[~clone_mask]
                 binary_color[:, 3] = tet_grad_color[:, 3]
-                render_pkg = render_alpha_blend_tiles_slang_raw(model.indices, model.vertices, None, sample_camera, cell_values=binary_color)
+                render_pkg = render_alpha_blend_tiles_slang_raw(model.indices, model.vertices, None, sample_camera, min_t=min_t, cell_values=binary_color)
                 image = render_pkg['render']
                 binary_im = (image.permute(1, 2, 0)*255).clip(min=0, max=255).cpu().numpy().astype(np.uint8)
                 imageio.imwrite(args.output_path / f'densify{iteration}.png', binary_im)
@@ -345,7 +348,7 @@ with torch.no_grad():
     epath = cam_util.generate_cam_path(train_cameras, 400)
     eimages = []
     for camera in tqdm(epath):
-        render_pkg = render(camera, model, tile_size=args.tile_size)
+        render_pkg = render(camera, model, min_t=min_t, tile_size=args.tile_size)
         image = render_pkg['render']
         image = image.permute(1, 2, 0)
         image = image.detach().cpu().numpy()
@@ -355,4 +358,4 @@ mediapy.write_video(args.output_path / "rotating.mp4", eimages)
 model.save2ply(args.output_path / "ckpt.ply", sample_camera)
 torch.save(model.state_dict(), args.output_path / "ckpt.pth")
 
-test_util.evaluate_and_save(model, test_cameras, args.output_path, args.tile_size)
+test_util.evaluate_and_save(model, test_cameras, args.output_path, args.tile_size, min_t)
