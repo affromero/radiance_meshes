@@ -177,12 +177,13 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         camera.fovy,
         camera.fovx,
         render_grid)
-    if cell_values is None:
-        cell_values = torch.zeros((mask.shape[0]), device=circumcenter.device)
-        if mask.sum() > 0:
-            vertex_color, cell_values[mask] = model.get_cell_values(camera, mask)
-        else:
-            vertex_color, cell_values = model.get_cell_values(camera)
+    # if cell_values is None:
+    #     cell_values = torch.zeros((mask.shape[0]), device=circumcenter.device)
+    #     if mask.sum() > 0:
+    #         vertex_color, cell_values[mask] = model.get_cell_values(camera, mask)
+    #     else:
+    #         vertex_color, cell_values = model.get_cell_values(camera)
+    vertex_color, cell_values = model.get_cell_values(camera)
     # cell_values = model.get_cell_values(camera)
 
     # torch.cuda.synchronize()
@@ -199,9 +200,7 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         sorted_tetra_idx,
         tile_ranges,
         model.indices,
-        # tet_vertices,
         vertices,
-        # verts_trans,
         vertex_color,
         cell_values,
         render_grid,
@@ -213,7 +212,8 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         min_t,
         camera.fovy,
         camera.fovx)
-    alpha = 1-image_rgb.permute(2,0,1)[3, ...]
+    # alpha = 1-image_rgb.permute(2,0,1)[3, ...]
+    # ic(alpha.min(), alpha.max())
     distortion_loss = ((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4])# / alpha.clip(min=1e-3)
     # ic(distortion_img)
     # torch.cuda.synchronize()

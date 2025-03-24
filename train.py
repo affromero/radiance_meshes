@@ -90,6 +90,7 @@ args.final_lights_lr = 1e-4
 args.color_lr = 1e-2
 args.final_color_lr = 1e-2
 args.p_norm = 100
+args.freeze_start = 9000
 
 args.hidden_dim = 64
 args.scale_multi = 1.0
@@ -124,6 +125,7 @@ args.split_std = 0.1
 args.split_mode = "barycentric"
 args.clone_schedule = "quadratic"
 args.base_min_t = 0.2
+args.sample_cam = 3
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
@@ -141,7 +143,7 @@ model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
 min_t = model.scene_scaling * args.base_min_t
 
 tet_optim = TetOptimizer(model, **args.as_dict())
-sample_camera = test_cameras[3]
+sample_camera = test_cameras[args.sample_cam]
 
 images = []
 psnrs = [[]]
@@ -177,7 +179,7 @@ progress_bar = tqdm(range(args.iterations))
 torch.cuda.empty_cache()
 for iteration in progress_bar:
     delaunay_interval = 10 if iteration < args.delaunay_start else 100
-    do_delaunay = iteration % delaunay_interval == 0
+    do_delaunay = iteration % delaunay_interval == 0 and iteration < args.freeze_start
     do_cloning = max(iteration - args.densify_start, 0) % args.densify_interval == 0 and args.densify_end > iteration >= args.densify_start
     do_sh_up = not args.sh_interval == 0 and iteration % args.sh_interval == 0 and iteration > 0
     do_sh_step = iteration % 1 == 0

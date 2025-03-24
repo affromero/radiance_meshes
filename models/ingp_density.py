@@ -31,6 +31,7 @@ import tinyplypy
 from utils.phong_shading import to_sphere, activate_lights, light_function, compute_vert_color
 from sh_slang.eval_sh import eval_sh
 
+
 def init_weights(m, gain):
     if isinstance(m, nn.Linear):
         nn.init.xavier_uniform_(m.weight, gain)
@@ -50,7 +51,6 @@ def pre_calc_cell_values(vertices, indices, center, scene_scaling: float, per_le
     # sphere_area = 4/3*math.pi*cr**3
     # scaling = safe_div(base_resolution * per_level_scale**n, sphere_area.reshape(-1, 1, 1)).clip(max=1)
     return cv.float(), scaling
-
 
 class Model(nn.Module):
     def __init__(self,
@@ -259,6 +259,12 @@ class Model(nn.Module):
         vertex_base_color = RGB2SH(torch.as_tensor(point_cloud.colors).float().to(device))
         vertex_base_color = vertex_base_color.reshape(-1, 1, 3).expand(-1, repeats, 3).reshape(-1, 3)
 
+        # add sphere
+        pcd_scaling = torch.linalg.norm(vertices - center.cpu().reshape(1, 3), dim=1, ord=torch.inf).max()
+        x = l2_normalize_th(torch.randn((1000, 3))) * 1.2 * pcd_scaling.cpu() + center.reshape(1, 3).cpu()
+        vertices = torch.cat([vertices, x], dim=0)
+        vertex_base_color = torch.cat([vertex_base_color, torch.zeros_like(x).to(vertex_base_color.device)], dim=0)
+
         # vertex_base_color = torch.ones_like(vertices, device=device) * 0.1
         # vertex_lights = torch.zeros((vertices.shape[0], num_lights*6)).to(device)
         vertex_lights = torch.zeros((vertices.shape[0], ((num_lights+1)**2-1)*3)).to(device)
@@ -285,17 +291,18 @@ class Model(nn.Module):
     def update_triangulation(self, alpha_threshold=1.0/255):
         verts = self.vertices
         v = Del(verts.shape[0])
-        indices_np, prev = v.compute(verts.detach().cpu())
+        verts_c = verts.detach().cpu()
+        indices_np, prev = v.compute(verts_c)
         indices_np = indices_np.numpy()
         finite_tets = (indices_np < verts.shape[0]).all(axis=1)
-        boundary_verts = np.unique(indices_np[~finite_tets].flatten())
+        self.boundary_tets = torch.zeros((indices_np.shape[0]), dtype=bool, device='cuda')
+        v = prev.get_boundary_tets(verts_c)
+        # ic(v, v.max(), indices_np.shape)
+        self.boundary_tets[v] = False
         indices_np = indices_np[finite_tets]
-
-        self.boundary_tets = torch.as_tensor(np.any(np.isin(indices_np, boundary_verts), axis=1)).cuda()
-
-        # Convert to tensor and move to CUDA
+        self.boundary_tets = self.boundary_tets[finite_tets]
         self.indices = torch.as_tensor(indices_np).cuda()
-        
+ 
         if alpha_threshold > 0:
             # Compute the density mask in chunks
             mask_list = []
