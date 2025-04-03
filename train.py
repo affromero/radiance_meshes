@@ -127,7 +127,7 @@ args.pre_multi = 10000
 args.split_std = 0.1
 args.split_mode = "barycentric"
 args.clone_schedule = "quadratic"
-args.base_min_t = 0.05
+args.base_min_t = 0.01
 args.sample_cam = 3
 
 args = Args.from_namespace(args.get_parser().parse_args())

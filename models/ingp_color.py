@@ -37,11 +37,45 @@ def init_weights(m, gain):
         if m.bias is not None:
             nn.init.zeros_(m.bias)
 
+def project_points_to_tetrahedra(points, tets):
+    """
+    Projects each point in `points` (shape (N, 3)) onto the corresponding tetrahedron in `tets` (shape (N, 4, 3))
+    by clamping negative barycentrics to zero and renormalizing them so that they sum to 1.
+
+    The barycentrics for a tetrahedron with vertices v0, v1, v2, v3 are computed as:
+      w0 = 1 - (x0+x1+x2)
+      w1, w2, w3 = x0, x1, x2, where x solves T x = (p - v0) with T = [v1-v0, v2-v0, v3-v0]
+    """
+    v0 = tets[:, 0, :]             # shape (N, 3)
+    T = tets[:, 1:, :] - v0.unsqueeze(1)  # shape (N, 3, 3)
+    T = T.permute(0,2,1)
+
+    # Solve for x: T x = (p - v0)
+    p_minus_v0 = points - v0       # shape (N, 3)
+    x = torch.linalg.solve(T, p_minus_v0.unsqueeze(2)).squeeze(2)  # shape (N, 3)
+
+    # Compute full barycentrics: weight for v0 and for v1,v2,v3.
+    w0 = 1 - x.sum(dim=1, keepdim=True)  # shape (N, 1)
+    bary = torch.cat([w0, x], dim=1)      # shape (N, 4)
+    bary = bary.clip(min=0)
+
+    norm = (bary.sum(dim=1, keepdim=True)).clip(min=1e-8)
+    # Clamp negative values and renormalize to sum to 1.
+    bary = torch.clamp(bary, min=0)
+    mask = (norm > 1).reshape(-1)
+    bary[mask] = bary[mask] / norm[mask]
+
+    # Reconstruct the point as the weighted sum of the tetrahedron vertices.
+    p_proj = (T * bary[:, 1:].unsqueeze(1)).sum(dim=2) + v0
+    return p_proj
+
 @torch.jit.script
 def pre_calc_cell_values(vertices, indices, center, scene_scaling: float, per_level_scale: float, L: int, scale_multi: float, base_resolution: float):
     device = vertices.device
-    circumcenter, radius = calculate_circumcenters_torch(vertices[indices].double())
-    normalized = (circumcenter - center) / scene_scaling
+    tets = vertices[indices]
+    circumcenter, radius = calculate_circumcenters_torch(tets.double())
+    clipped_circumcenter = project_points_to_tetrahedra(circumcenter.float(), tets)
+    normalized = (clipped_circumcenter - center) / scene_scaling
     cv, cr = contract_mean_std(normalized, radius / scene_scaling)
     cr = cr.float() * scale_multi
     n = torch.arange(L, device=device).reshape(1, 1, -1)
@@ -84,6 +118,7 @@ class Model(nn.Module):
                  hidden_dim=64,
                  contract_vertices=True,
                  density_offset=-1,
+                 max_lights=2,
                  num_lights=2,
                  light_offset=-3,
                  **kwargs):
@@ -94,7 +129,7 @@ class Model(nn.Module):
         self.device = vertices.device
         self.density_offset = density_offset
         self.num_lights = num_lights
-        self.max_lights = 2
+        self.max_lights = max_lights
         self.light_offset = light_offset
         self.dir_offset = torch.tensor([
             [0, 0],
@@ -266,14 +301,13 @@ class Model(nn.Module):
 
         # The first 4 columns in rgbs are [r, g, b, s].
         tetra_dict["s"] = np.ascontiguousarray(rgbs[:, 0])
-        tetra_dict["r"] = np.ascontiguousarray(rgbs[:, 1])
-        tetra_dict["g"] = np.ascontiguousarray(rgbs[:, 2])
-        tetra_dict["b"] = np.ascontiguousarray(rgbs[:, 3])
+        # tetra_dict["r"] = np.ascontiguousarray(rgbs[:, 1])
+        # tetra_dict["g"] = np.ascontiguousarray(rgbs[:, 2])
+        # tetra_dict["b"] = np.ascontiguousarray(rgbs[:, 3])
 
-        # Then the remainder are the per-light columns:
         for i, c in enumerate(["r", "g", "b"]):
             for j, co in enumerate(["x", "y", "z", "w"]):
-                tetra_dict[f"{c}_{co}"]         = np.ascontiguousarray(rgbs[:, i*4+j])
+                tetra_dict[f"{c}_{co}"]         = np.ascontiguousarray(rgbs[:, i*4+j+1])
 
         # 4. Final data structure:
         # data_dict[element_name][property_name] = numpy_array
@@ -328,8 +362,8 @@ class Model(nn.Module):
 
         # add sphere
         pcd_scaling = torch.linalg.norm(vertices - center.cpu().reshape(1, 3), dim=1, ord=2).max()
-        x = l2_normalize_th(torch.randn((1000, 3))) * 1.2 * pcd_scaling.cpu() + center.reshape(1, 3).cpu()
-        vertices = torch.cat([vertices, x], dim=0)
+        # x = l2_normalize_th(torch.randn((1000, 3))) * 1.2 * pcd_scaling.cpu() + center.reshape(1, 3).cpu()
+        # vertices = torch.cat([vertices, x], dim=0)
         # vertex_base_color = torch.cat([vertex_base_color, torch.zeros_like(x).to(vertex_base_color.device)], dim=0)
         vertex_lights = torch.zeros((vertices.shape[0], ((num_lights+1)**2-1)*3)).to(device)
 
