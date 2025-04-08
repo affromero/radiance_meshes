@@ -166,6 +166,10 @@ class Model(nn.Module):
             self.contracted_vertices = nn.Parameter(vertices.detach())
         self.update_triangulation()
 
+    @property
+    def num_int_verts(self):
+        return self.contracted_vertices.shape[0]
+
     def get_circumcenters(self):
         circumcenter, cv, cr, normalized =  pre_calc_cell_values(
             self.vertices, self.indices, self.center, self.scene_scaling)
@@ -267,6 +271,11 @@ class Model(nn.Module):
         model.indices = torch.as_tensor(indices).cuda()
         model.boundary_tets = torch.zeros((indices.shape[0]), dtype=bool, device='cuda')
         return model
+
+    @torch.no_grad
+    def perturb_vertices(self, perturbation):
+        # if contracting vertices, must have the contraction accounted for
+        self.contracted_vertices.data += perturbation[:self.contracted_vertices.shape[0]]
 
     def calc_vert_alpha(self):
         tet_alphas = self.calc_tet_alpha()

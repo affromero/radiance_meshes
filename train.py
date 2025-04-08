@@ -305,14 +305,6 @@ for iteration in progress_bar:
     dl_loss = render_pkg['distortion_loss']
     loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss + reg + args.lambda_dist * dl_loss
 
-    mask = render_pkg['mask']
-    cc = render_pkg['normed_cc']
-    reg_perturb = compute_perturbation(model.indices, model.vertices, cc, render_pkg['density'],
-                                   mask, render_pkg['cc_sensitivity'],
-                                   tet_optim.vertex_lr, k=100, t=(1-0.005))
-    reg = args.lambda_noise * reg_perturb
-    loss = loss + reg
-
     # ----- Add total variation loss for bilateral grid if enabled -----
     tvloss = None
     if args.use_bilateral_grid:
@@ -324,6 +316,14 @@ for iteration in progress_bar:
     st = time.time()
     loss.backward()
     # tet_optim.clip_gradient(args.grad_clip)
+
+    mask = render_pkg['mask']
+    cc = render_pkg['normed_cc']
+    v_perturb = compute_v_perturbation(
+        model.indices, model.vertices, cc, render_pkg['density'],
+        mask, render_pkg['cc_sensitivity'],
+        tet_optim.vertex_lr, k=100, t=(1-0.005))
+    model.perturb_vertices(v_perturb)
 
     tet_optim.main_step()
     tet_optim.main_zero_grad()
