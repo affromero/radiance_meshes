@@ -272,7 +272,7 @@ for iteration in progress_bar:
 
     # torch.cuda.synchronize()
     # print(f'render: {(time.time()-st)}')
-    image = render_pkg['render'].clip(min=0, max=1)
+    image = render_pkg['render']#.clip(min=0, max=1)
 
     # ----- Apply bilateral grid transformation if enabled -----
     if args.use_bilateral_grid:
@@ -302,11 +302,12 @@ for iteration in progress_bar:
         image = transformed["rgb"].reshape(h, w, 3).permute(2, 0, 1)
     # --------------------------------------------------------
 
+    l1_loss = (target - image).abs().mean()
     l2_loss = ((target - image)**2).mean()
     reg = tet_optim.regularizer()
-    ssim_loss = 1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))
+    ssim_loss = (1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))).clip(min=0, max=1)
     dl_loss = render_pkg['distortion_loss']
-    loss = (1-args.lambda_ssim)*l2_loss + args.lambda_ssim*ssim_loss + reg + args.lambda_dist * dl_loss
+    loss = (1-args.lambda_ssim)*l1_loss + args.lambda_ssim*ssim_loss + reg + args.lambda_dist * dl_loss
 
     # ----- Add total variation loss for bilateral grid if enabled -----
     tvloss = None
