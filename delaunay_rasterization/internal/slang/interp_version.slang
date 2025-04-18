@@ -5,8 +5,8 @@ import safe_math;
 struct SplatTetrahedra_interp : IDifferentiable
 {
     Tetrahedra tet;
-    float density;          // Single scalar density for the entire tetrahedron
     float4x3 vertex_color; // Per-vertex color to be barycentrically interpolated
+    float density;          // Single scalar density for the entire tetrahedron
 };
 
 // Given three vertex-colors (c0, c1, c2) and the barycentric coords (u,v)
@@ -146,7 +146,7 @@ SplatTetrahedra_interp load_tet_alphablend_interp(
     };
 
     SplatTetrahedra_interp result = {
-        tet, density, {c0, c1, c2, c3}
+        tet, {c0, c1, c2, c3}, density
     };
     return result;
 }

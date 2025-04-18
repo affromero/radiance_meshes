@@ -206,7 +206,6 @@ def compute_vertex_sensitivity(indices: torch.Tensor, vertices: torch.Tensor,
 
     # jacobian_matrix_sens = J_d.clip(min=1e-3)/compute_spectral_norm3(a).clip(min=1e-5)
     # jacobian_matrix_sens = J_d.clip(min=1e-5)*sp_norm.clip(min=1e-5)
-    # jacobian_matrix_sens = sp_norm.clip(min=1e-5) / J_d.clip(min=1e-5)
     jacobian_matrix_sens = sp_norm.clip(min=1e-5)# / J_d.clip(min=1e-5)
     num_vertices = vertices.shape[0]
 
@@ -222,7 +221,7 @@ def compute_vertex_sensitivity(indices: torch.Tensor, vertices: torch.Tensor,
 
     # only use sp_norm here because the perturbations are applied in contracted space
     # multiply by J_d to cancel out contracted perturbations
-    return J_d*sp_norm, vertex_sensitivity.reshape(num_vertices, -1)
+    return J_d * sp_norm, vertex_sensitivity.reshape(num_vertices, -1)
 
 def fibonacci_spiral_on_sphere(n_points: int, 
                                radius: float = 1.0, 

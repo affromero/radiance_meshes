@@ -47,45 +47,45 @@ float safe_exp4alpha(float x) {
     return safe_clip(safe_exp(x), 0, 1);
 }
 
-// [Differentiable]
-// float moment_0_int(float a, float b, float s1, float T) {
-//     return T * safe_div((-safe_expm1(s1*(a - b))),s1);
-// }
-// [Differentiable]
-// float moment_1_int(float a, float b, float s1, float T) {
-//     if (s1 < 1e-6) {
-//         return T * 0.5 * max(b * b - a * a, 0);
-//     } else {
-//         // return (a*s1 - (b*s1 + 1)*safe_exp4alpha(s1*(a - b)) + 1) / (s1*s1);
-//         return T * max(-safe_div(safe_expm1(s1*(a - b)), s1*s1) + (a - b*safe_exp(s1*(a - b))) / s1, 0);
-//     }
-// }
-// [Differentiable]
-// float self_dist(float a, float b, float s, float T) {
-//     float dt = (a - b);
-//     float ds = s * dt;
-//     if (abs(ds) < 1e-4) {
-//         return T * T * max(-1 / 3 * pow(dt, 3), 0);
-//     } else {
-//         return T*T*max(safe_div(( 2 * s * (a - b) * exp(ds) - safe_expm1(2 * ds)),
-//                 (s * s * s)), 0);
-//     }
-// }
-
 [Differentiable]
 float moment_0_int(float a, float b, float s1, float T) {
-    return s1;
+    return T * safe_div((-safe_expm1(s1*(a - b))),s1);
 }
 [Differentiable]
 float moment_1_int(float a, float b, float s1, float T) {
-    return s1 * (b+a)/2;
+    if (s1 < 1e-6) {
+        return T * 0.5 * max(b * b - a * a, 0);
+    } else {
+        // return (a*s1 - (b*s1 + 1)*safe_exp4alpha(s1*(a - b)) + 1) / (s1*s1);
+        return T * max(-safe_div(safe_expm1(s1*(a - b)), s1*s1) + (a - b*safe_exp(s1*(a - b))) / s1, 0);
+    }
 }
 [Differentiable]
 float self_dist(float a, float b, float s, float T) {
-    float dt = max(b - a, 0);
-    return s*s*dt/3;
-
+    float dt = (a - b);
+    float ds = s * dt;
+    if (abs(ds) < 1e-4) {
+        return T * T * max(-1 / 3 * pow(dt, 3), 0);
+    } else {
+        return T*T*max(safe_div(( 2 * s * (a - b) * exp(ds) - safe_expm1(2 * ds)),
+                (s * s * s)), 0);
+    }
 }
+
+// [Differentiable]
+// float moment_0_int(float a, float b, float s1, float T) {
+//     return s1;
+// }
+// [Differentiable]
+// float moment_1_int(float a, float b, float s1, float T) {
+//     return s1 * (b+a)/2;
+// }
+// [Differentiable]
+// float self_dist(float a, float b, float s, float T) {
+//     float dt = max(b - a, 0);
+//     return s*s*dt/3;
+
+// }
 
 [Differentiable]
 DistortionState5 update_distortion_state(
@@ -101,7 +101,8 @@ DistortionState5 update_distortion_state(
     float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
     float end = dist.y;  // tukey_power_ladder(dist.y*pre_multi, ladder_p);
     float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
-    float d = log(1+density);
+    // float d = log(1+density);
+    float d = density;
 
     float m0 = moment_0_int(start, end, d, T); // just weight
     float m1 = moment_1_int(start, end, d, T);
@@ -134,8 +135,8 @@ DistortionState5 undo_distortion_state(
     float end = dist.y;//tukey_power_ladder(dist.y*pre_multi, ladder_p);
     // float scaling = scale_dist((dist.x+dist.y)*0.5);
     float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
-    //float d = density;
-    float d = log(1+density);
+    float d = density;
+    // float d = log(1+density);
 
     float m0 = moment_0_int(start, end, d, T);
     float m1 = moment_1_int(start, end, d, T);
@@ -235,7 +236,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
 
     int32_t local_n_contrib = 0;
     // int32_t low = 0;
-    int countdown = 20;
+    int countdown = 1;
     int splats_left_to_process = tile_idx_end - tile_idx_start;
     for (int i = 0; i < shared_memory_rounds; i++)
     {
@@ -255,7 +256,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 local_n_contrib++;
                 SplatTetrahedra_interp g = collected_splats[j];
                 CtrlPt tetra_ctrl;
-                if (evaluate_tetra_interp(g, ray.o, ray.d, min_t, tetra_ctrl) && tetra_ctrl.rgba.a > 1e-4) {
+                if (evaluate_tetra_interp(g, ray.o, ray.d, min_t, tetra_ctrl) && tetra_ctrl.rgba.a > 0) {
                     AlphaOut new_ao = update_alpha_out(ao, tetra_ctrl, pre_multi, ladder_p);
                     ao = new_ao;
                     // tet_alive[collected_idx[j]] = true;
@@ -265,15 +266,8 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                     // }
 
                     if (new_ao.rgba.a < 1 / 255.f) {
-                        countdown--;
-                    }
-                    // if (new_ao.rgba.a < 1 / 255.f) {
-                    //     // This Splat never registred so we subtract it before we break.
-                    //     // local_n_contrib--;
-                    //     thread_active = false;
-                    //     break;
-                    // }
-                    if (countdown == 0) {
+                        // This Splat never registred so we subtract it before we break.
+                        // local_n_contrib--;
                         thread_active = false;
                         break;
                     }
@@ -366,7 +360,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 SplatTetrahedra_interp g = collected_splats[j];
 
                 CtrlPt tetra_ctrl;
-                if (evaluate_tetra_interp(g, ray.o, ray.d, min_t, tetra_ctrl) && tetra_ctrl.rgba.a > 1e-4) {
+                if (evaluate_tetra_interp(g, ray.o, ray.d, min_t, tetra_ctrl) && tetra_ctrl.rgba.a > 0) {
                     // CtrlPt tetra_ctrl = evaluate_tetra_2D(g, cam, min_t, center_pix_coord);
                     // if (tetra_ctrl.rgba.a < 1 / 255.f) {
                     //     printf("Continue\n");

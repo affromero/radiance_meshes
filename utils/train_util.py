@@ -180,7 +180,9 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         min_t,
         camera.fovy,
         camera.fovx)
-    total_density = (distortion_img[:, :, 2]**2).clip(min=1e-6)
+    alpha = image_rgb.permute(2,0,1)[3, ...]
+    # total_density = (distortion_img[:, :, 2]**2).clip(min=1e-6)
+    total_density = ((1-alpha) ** 2).clip(min=1e-6)
     distortion_loss = (((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4]) / total_density).clip(min=0)
     vert_alive = torch.zeros((vertices.shape[0]), dtype=bool, device=device)
     
@@ -193,7 +195,7 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
 
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
-        'alpha': image_rgb.permute(2,0,1)[3, ...],
+        'alpha': alpha,
         'distortion_img': distortion_img,
         'distortion_loss': distortion_loss.mean(),
         'visibility_filter': mask,

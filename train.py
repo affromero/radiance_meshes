@@ -327,18 +327,18 @@ for iteration in progress_bar:
     mask = render_pkg['mask']
     cc = render_pkg['normed_cc']
     st = time.time()
-    alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
-    # loss += args.lambda_alpha * (-4 * alphas * (alphas-1)).mean()
-    loss += args.lambda_alpha * - ((alphas * safe_math.safe_log(alphas) + (1-alphas) * safe_math.safe_log(1-alphas))).mean()
-    x = render_pkg['density'][mask]
-    loss += args.lambda_density * (x * (-x**2).exp()).mean()
+    # alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
+    # # loss += args.lambda_alpha * (-4 * alphas * (alphas-1)).mean()
+    # loss += args.lambda_alpha * - ((alphas * safe_math.safe_log(alphas) + (1-alphas) * safe_math.safe_log(1-alphas))).mean()
+    # x = render_pkg['density'][mask]
+    # loss += args.lambda_density * (x * (-x**2).exp()).mean()
     loss.backward()
     # tet_optim.clip_gradient(args.grad_clip)
 
-    v_perturb = compute_v_perturbation(
-        model.indices, model.vertices, cc, alphas,
-        mask, render_pkg['cc_sensitivity'],
-        tet_optim.vertex_lr, k=100, t=(1-0.005))
+    # v_perturb = compute_v_perturbation(
+    #     model.indices, model.vertices, cc, alphas,
+    #     mask, render_pkg['cc_sensitivity'],
+    #     tet_optim.vertex_lr, k=100, t=(1-0.005))
 
     tet_optim.main_step()
     tet_optim.main_zero_grad()
