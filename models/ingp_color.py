@@ -590,7 +590,7 @@ class TetOptimizer:
             new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
             new_vertex_lights = (self.model.vertex_lights[clone_indices] * barycentric_weights).sum(dim=1)
         elif split_mode == "split_point":
-            split_point += 1e-3*torch.randn(*split_point.shape, device=self.model.device)
+            split_point += 1e-4*torch.randn(*split_point.shape, device=self.model.device)
             new_vertex_location = split_point
             barycentric_weights = calc_barycentric(split_point, clone_vertices)
             barycentric_weights = barycentric_weights / (1e-3+barycentric_weights.sum(dim=1, keepdim=True))
@@ -599,10 +599,10 @@ class TetOptimizer:
         else:
             raise Exception(f"Split mode: {split_mode} not supported")
         self.add_points(new_vertex_location, new_vertex_lights)
-        # mask = self.model.calc_vert_density() < density_threshold
-        # print(f"Pruned: {mask.sum()} points")
-        # self.remove_points(~mask)
-        # del mask
+        mask = self.model.calc_vert_alpha() < density_threshold
+        print(f"Pruned: {mask.sum()} points")
+        self.remove_points(~mask)
+        del mask
 
     def main_step(self):
         self.optim.step()

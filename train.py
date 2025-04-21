@@ -133,16 +133,16 @@ args.split_std = 0.1
 args.split_mode = "split_point"
 args.clone_schedule = "quadratic"
 args.min_tet_count = 4
-args.prune_alpha_thres = 0.0
+args.prune_alpha_threshold = 0.0
 args.densify_start = 2000
-args.densify_end = 8000
+args.densify_end = 15000
 args.num_samples = 200
 args.densify_interval = 500
 args.budget = 2_000_000
 args.lambda_noise = 0
 
 args.lambda_ssim = 0.2
-args.base_min_t = 0.05
+args.min_t = 0.05
 args.sample_cam = 0
 args.data_device = 'cpu'
 args.lambda_alpha = 0.0
@@ -172,7 +172,7 @@ else:
     model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
                                 max_lights = args.num_lights if args.sh_interval <= 0 else 0,
                                 **args.as_dict())
-min_t = model.scene_scaling * args.base_min_t
+min_t = args.min_t
 
 tet_optim = TetOptimizer(model, **args.as_dict())
 if args.eval:
@@ -267,7 +267,7 @@ for iteration in progress_bar:
 
     st = time.time()
     bg = 0
-    render_pkg = render(camera, model, bg=bg, min_t=min_t, clip_multi=tet_optim.clip_multi, **args.as_dict())
+    render_pkg = render(camera, model, bg=bg, clip_multi=tet_optim.clip_multi, **args.as_dict())
     # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
     #          profile_memory=True, with_stack=True) as prof:
     #     with record_function("model_inference"):
@@ -348,8 +348,8 @@ for iteration in progress_bar:
         tet_optim.sh_optim.zero_grad()
 
     if do_delaunay:
-        model.perturb_vertices(args.lambda_noise * v_perturb)
-        circumcenters = model.get_circumcenters()
+        # model.perturb_vertices(args.lambda_noise * v_perturb)
+        # circumcenters = model.get_circumcenters()
         # cc_locations.append(
         #     model.contract(circumcenters.detach()).cpu().numpy()
         # )
@@ -447,7 +447,7 @@ for iteration in progress_bar:
                 clone_indices = model.indices[clone_mask]
 
                 split_point = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[clone_mask]
-                tet_optim.split(clone_indices, split_point, args.split_mode, args.prune_alpha_thres)
+                tet_optim.split(clone_indices, split_point, args.split_mode, args.prune_alpha_threshold)
 
 
                 out = f"#RGBS Clone: {(tet_err_weight > rgbs_threshold).sum()} "

@@ -1,0 +1,11 @@
+dataset_path,lambda_dist
+/optane/nerf_datasets/360/bicycle,0
+/optane/nerf_datasets/360/garden,0
+/optane/nerf_datasets/360/room,0
+/optane/nerf_datasets/360/counter,0
+/optane/nerf_datasets/360/kitchen,0
+/optane/nerf_datasets/360/stump,0
+/optane/nerf_datasets/360/bonsai,0
+/optane/nerf_datasets/360/treehill,0
+/optane/nerf_datasets/360/flowers,0
+
