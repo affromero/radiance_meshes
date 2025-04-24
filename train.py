@@ -76,9 +76,9 @@ args = Args()
 args.tile_size = 16
 args.image_folder = "images_4"
 args.eval = False
-args.dataset_path = Path("/optane/nerf_datasets/360/bicycle")
+args.dataset_path = Path("/optane/nerf_datasets/360/garden")
 args.output_path = Path("output/test/")
-args.iterations = 30000
+args.iterations = 10000
 args.max_steps = 30000
 args.ckpt = ""
 args.render_train = False
@@ -87,16 +87,18 @@ args.render_train = False
 args.light_offset = -3
 args.lights_lr = 5e-3
 args.final_lights_lr = 5e-3
+args.lights_lr_delay = 500
 args.color_lr = 1e-2
 args.final_color_lr = 1e-2
-args.num_lights = 2
+args.num_lights = 3
 args.sh_interval = 2000
+args.sh_step = 1
 
 # iNGP Settings
-args.encoding_lr = 1e-3
-args.final_encoding_lr = 1e-3
-args.network_lr = 5e-5
-args.final_network_lr = 5e-6
+args.encoding_lr = 6e-3
+args.final_encoding_lr = 6e-3
+args.network_lr = 1e-3
+args.final_network_lr = 1e-3
 args.hidden_dim = 64
 args.scale_multi = 1.0
 args.log2_hashmap_size = 22
@@ -114,7 +116,7 @@ args.vertices_lr = 1e-4
 args.final_vertices_lr = 5e-8
 args.vertices_lr_delay_multi = 1e-8
 args.vertices_beta = [0.9, 0.99]
-args.contract_vertices = False
+args.contract_vertices = True
 args.start_clip_multi = 1e-3
 args.end_clip_multi = 1e-3
 args.delaunay_start = 17000
@@ -122,7 +124,7 @@ args.freeze_start = 25000
 args.ext_convex_hull = False
 
 # Distortion Settings
-args.lambda_dist = 1e-7
+args.lambda_dist = 1e-5
 args.ladder_p = -0.25
 args.pre_multi = 10000
 
@@ -133,8 +135,8 @@ args.split_std = 0.1
 args.split_mode = "split_point"
 args.clone_schedule = "quadratic"
 args.min_tet_count = 4
-args.prune_alpha_threshold = 0.0
-args.densify_start = 2000
+args.prune_density_threshold = 0.0
+args.densify_start = 2500
 args.densify_end = 15000
 args.num_samples = 200
 args.densify_interval = 500
@@ -142,12 +144,13 @@ args.budget = 2_000_000
 args.lambda_noise = 0
 
 args.lambda_ssim = 0.2
-args.min_t = 0.05
-args.sample_cam = 0
+args.base_min_t = 0.2
+args.sample_cam = 4
 args.data_device = 'cpu'
 args.lambda_alpha = 0.0
 args.lambda_density = 0.0
-args.lambda_color = 1e-4
+args.lambda_color = 0.0
+args.density_threshold = 0.0
 
 # Bilateral grid arguments
 # Bilateral grid parameters
@@ -163,6 +166,7 @@ args.output_path.mkdir(exist_ok=True, parents=True)
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval)
 
+
 args.num_samples = min(len(train_cameras), args.num_samples)
 
 device = torch.device('cuda')
@@ -172,7 +176,8 @@ else:
     model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
                                 max_lights = args.num_lights if args.sh_interval <= 0 else 0,
                                 **args.as_dict())
-min_t = args.min_t
+min_t = args.min_t = args.base_min_t * model.scene_scaling.item()
+ic(args.min_t)
 
 tet_optim = TetOptimizer(model, **args.as_dict())
 if args.eval:
@@ -255,7 +260,7 @@ for iteration in progress_bar:
     do_freeze = iteration == args.freeze_start
     do_cloning = max(iteration - args.densify_start, 0) % args.densify_interval == 0 and args.densify_end > iteration >= args.densify_start
     do_sh_up = not args.sh_interval == 0 and iteration % args.sh_interval == 0 and iteration > 0
-    do_sh_step = iteration % 16 == 0
+    do_sh_step = iteration % args.sh_step == 0
 
     if len(inds) == 0:
         inds = list(range(len(train_cameras)))
@@ -311,7 +316,7 @@ for iteration in progress_bar:
 
     l1_loss = (target - image).abs().mean()
     l2_loss = ((target - image)**2).mean()
-    reg = tet_optim.regularizer()
+    reg = tet_optim.regularizer(render_pkg)
     ssim_loss = (1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))).clip(min=0, max=1)
     dl_loss = render_pkg['distortion_loss']
     loss = (1-args.lambda_ssim)*l1_loss + args.lambda_ssim*ssim_loss + reg + args.lambda_dist * dl_loss
@@ -327,7 +332,7 @@ for iteration in progress_bar:
     mask = render_pkg['mask']
     cc = render_pkg['normed_cc']
     st = time.time()
-    # alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
+    alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
     # # loss += args.lambda_alpha * (-4 * alphas * (alphas-1)).mean()
     # loss += args.lambda_alpha * - ((alphas * safe_math.safe_log(alphas) + (1-alphas) * safe_math.safe_log(1-alphas))).mean()
     # x = render_pkg['density'][mask]
@@ -335,10 +340,10 @@ for iteration in progress_bar:
     loss.backward()
     # tet_optim.clip_gradient(args.grad_clip)
 
-    # v_perturb = compute_v_perturbation(
-    #     model.indices, model.vertices, cc, alphas,
-    #     mask, render_pkg['cc_sensitivity'],
-    #     tet_optim.vertex_lr, k=100, t=(1-0.005))
+    v_perturb = compute_v_perturbation(
+        model.indices, model.vertices, cc, alphas,
+        mask, render_pkg['cc_sensitivity'],
+        tet_optim.vertex_lr, k=100, t=(1-0.005))
 
     tet_optim.main_step()
     tet_optim.main_zero_grad()
@@ -348,7 +353,7 @@ for iteration in progress_bar:
         tet_optim.sh_optim.zero_grad()
 
     if do_delaunay:
-        # model.perturb_vertices(args.lambda_noise * v_perturb)
+        model.perturb_vertices(args.lambda_noise * v_perturb)
         # circumcenters = model.get_circumcenters()
         # cc_locations.append(
         #     model.contract(circumcenters.detach()).cpu().numpy()
@@ -447,7 +452,7 @@ for iteration in progress_bar:
                 clone_indices = model.indices[clone_mask]
 
                 split_point = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[clone_mask]
-                tet_optim.split(clone_indices, split_point, args.split_mode, args.prune_alpha_threshold)
+                tet_optim.split(clone_indices, split_point, args.split_mode, args.prune_density_threshold)
 
 
                 out = f"#RGBS Clone: {(tet_err_weight > rgbs_threshold).sum()} "
@@ -473,7 +478,7 @@ for iteration in progress_bar:
 
     if do_delaunay:
         st = time.time()
-        model.update_triangulation(high_precision=do_freeze)
+        tet_optim.update_triangulation(density_threshold=args.density_threshold, high_precision=do_freeze)
 
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 video_writer.release()

@@ -73,12 +73,12 @@ bool evaluate_tetra_interp(
     bool hit = ray_tetrahedron_intersect_fused(
         ray_o, ray_d, verts, dist);
 
-    float enter = max(dist.x, t_min);
+    float enter = dist.x;
     float exit = max(dist.y, enter);
     float dt = max(dist.y - enter, 0.0f);
     float intersection_t = 0.5*(exit+enter);
 
-    if (!hit) {
+    if (!hit || dt < 1e-5f) {
         ctrl_pt = { (float4)(0.f, 0.f, 0.f, 0.f), {0.f, 0.f}, g.density };
         return false;
     } else {

@@ -698,13 +698,13 @@ Ray get_ray(Camera cam, float2 center_pix_coord, float min_t) {
     // Construct pixel ray in camera space
     float fx = cam.K[0][0];
     float fy = cam.K[1][1];
-    ray.d = mul(V, normalize(float3(
+    ray.d = normalize(mul(V, float3(
         (center_pix_coord.x - cam.K[0][2]) / fx,
         (center_pix_coord.y - cam.K[1][2]) / fy,
         1.0
     )));
     
-    ray.o = cam.position;// + ray.d * min_t;
+    ray.o = cam.position + ray.d * min_t;
     return ray;
 }
 

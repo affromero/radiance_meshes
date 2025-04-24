@@ -160,11 +160,9 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, min_t=0.1, lambda_
     ratio = weight_clip / weight.clip(min=1e-5)
     tet_err = tet_err * ratio
     # ic((tet_area > 2).float().mean(), tet_area.mean())
-    mask = tet_area > 1
     # tet_err = torch.where(mask, tet_err, 0)
 
     return tet_err, dict(
-        mask = mask,
         alpha = alpha,
         tet_area = tet_area,
         tet_count = tet_count,

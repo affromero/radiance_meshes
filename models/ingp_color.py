@@ -6,7 +6,7 @@ from sh_slang.eval_sh import eval_sh
 from gDel3D.build.gdel3d import Del
 from torch import nn
 from icecream import ic
-from utils.topo_utils import calculate_circumcenters_torch, fibonacci_spiral_on_sphere, calc_barycentric, sample_uniform_in_sphere
+from utils.topo_utils import calculate_circumcenters_torch, fibonacci_spiral_on_sphere, calc_barycentric, sample_uniform_in_sphere, project_points_to_tetrahedra
 from utils.safe_math import safe_exp, safe_div, safe_sqrt
 from utils.contraction import contract_mean_std
 from utils.contraction import contract_points, inv_contract_points
@@ -217,8 +217,8 @@ class Model(nn.Module):
             ext_vertices = expand_convex_hull(vertices, 5, device=vertices.device)
             num_ext = ext_vertices.shape[0]
         else:
-            new_radius = 2* pcd_scaling.cpu()
-            within_sphere = sample_uniform_in_sphere(10000, 3, radius=new_radius.item(), device='cpu') + center.reshape(1, 3).cpu()
+            new_radius = pcd_scaling.cpu().item()
+            within_sphere = sample_uniform_in_sphere(10000, 3, base_radius=new_radius, radius=new_radius, device='cpu') + center.reshape(1, 3).cpu()
             vertices = torch.cat([vertices, within_sphere], dim=0)
             num_ext = 1000
             ext_vertices = fibonacci_spiral_on_sphere(num_ext, new_radius, device='cpu') + center.reshape(1, 3).cpu()
@@ -226,10 +226,11 @@ class Model(nn.Module):
 
         # num_ext = 1000
         # ext_vertices = fibonacci_spiral_on_sphere(num_ext, 2* pcd_scaling.cpu(), device='cpu') + center.reshape(1, 3).cpu()
+        ic(num_lights)
         vertex_lights = torch.zeros((vertices.shape[0] + num_ext, ((num_lights+1)**2-1)*3)).to(device)
 
         vertices = nn.Parameter(vertices.cuda())
-        model = Model(vertices, ext_vertices, vertex_lights, center, scaling, **kwargs)
+        model = Model(vertices, ext_vertices, vertex_lights, center, scaling, num_lights=num_lights, **kwargs)
         return model
 
     def compute_batch_features(self, vertices, indices, start, end, circumcenters=None):
@@ -319,7 +320,7 @@ class Model(nn.Module):
             edge_lengths = torch.stack([
                 torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
                 torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
-            ], dim=0).min(dim=0)[0]
+            ], dim=0).max(dim=0)[0]
             
             # Compute the maximum possible alpha using the largest edge length
             alpha = 1 - torch.exp(-density * edge_lengths)
@@ -439,7 +440,7 @@ class Model(nn.Module):
         self.max_lights = min(self.num_lights, self.max_lights+1)
 
     @torch.no_grad()
-    def update_triangulation(self, high_precision=False, alpha_threshold=0.00/255):
+    def update_triangulation(self, high_precision=False, density_threshold=0):
         torch.cuda.empty_cache()
         verts = self.vertices
         if high_precision:
@@ -454,8 +455,8 @@ class Model(nn.Module):
         
         self.indices = torch.as_tensor(indices_np).cuda()
         
-        if alpha_threshold > 0:
-            mask = self.calc_tet_alpha() > alpha_threshold
+        if density_threshold > 0:
+            mask = self.calc_tet_density() > density_threshold
             self.indices = self.indices[mask]
             
             del prev, mask
@@ -483,9 +484,12 @@ class TetOptimizer:
                  lambda_color=1e-10,
                  split_std: float = 0.5,
                  lights_lr: float=1e-4,
+                 final_lights_lr: float=1e-4,
                  lr_delay: int = 500,
+                 lights_lr_delay: int = 500,
                  max_steps: int = 10000,
                  vert_lr_delay: int = 500,
+                 sh_interval: int = 1000,
                  **kwargs):
         self.weight_decay = weight_decay
         self.lambda_color = lambda_color
@@ -513,6 +517,14 @@ class TetOptimizer:
                                                 lr_delay_mult=1e-8,
                                                 lr_delay_steps=lr_delay,
                                                 max_steps=max_steps)
+
+        self.sh_interval = sh_interval
+        self.sh_scheduler_args = get_expon_lr_func(lr_init=lights_lr,
+                                                lr_final=final_lights_lr,
+                                                lr_delay_mult=1e-8,
+                                                lr_delay_steps=lights_lr_delay,
+                                                max_steps=max_steps-self.sh_interval)
+
         self.encoder_scheduler_args = get_expon_lr_func(lr_init=encoding_lr,
                                                 lr_final=final_encoding_lr,
                                                 lr_delay_mult=1e-8,
@@ -540,6 +552,9 @@ class TetOptimizer:
             if param_group["name"] == "network":
                 lr = self.net_scheduler_args(iteration)
                 param_group['lr'] = lr
+        for param_group in self.lights_optim.param_groups:
+            lr = self.sh_scheduler_args(max(iteration-self.sh_interval, 0))
+            param_group['lr'] = lr
         for param_group in self.optim.param_groups:
             if param_group["name"] == "encoding":
                 lr = self.encoder_scheduler_args(iteration)
@@ -599,7 +614,7 @@ class TetOptimizer:
         else:
             raise Exception(f"Split mode: {split_mode} not supported")
         self.add_points(new_vertex_location, new_vertex_lights)
-        mask = self.model.calc_vert_alpha() < density_threshold
+        mask = self.model.calc_vert_density() < density_threshold
         print(f"Pruned: {mask.sum()} points")
         self.remove_points(~mask)
         del mask
@@ -620,8 +635,21 @@ class TetOptimizer:
         for module in self.model.backbone.encoding.embeddings:
             torch.nn.utils.clip_grad_norm_(module.parameters(), grad_clip, error_if_nonfinite=True)
 
-    def regularizer(self):
+    def regularizer(self, render_pkg):
         weight_decay = self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.backbone.encoding.embeddings])
         mean_sh = (self.model.vertex_lights).abs().mean()
         sh_decay = self.lambda_color * mean_sh
-        return sh_decay + weight_decay
+
+        density = torch.zeros((self.model.indices.shape[0]), device='cuda')
+        density[render_pkg['mask']] = render_pkg['density']
+
+        diff  = density[self.pairs[:,0]] - density[self.pairs[:,1]]
+        tv_loss  = (self.areas * diff.abs())
+        tv_loss  = tv_loss.sum() / self.areas.sum()
+
+        return sh_decay + weight_decay + self.lambda_tv * tv_loss
+
+    def update_triangulation(self, **kwargs):
+        self.model.update_triangulation(**kwargs)
+        self.owners, self.face_area = topo_utils.build_tv_struct(
+            self.model.vertices.detach(), self.model.indices, device='cuda')

@@ -203,10 +203,7 @@ def compute_vertex_sensitivity(indices: torch.Tensor, vertices: torch.Tensor,
     # we actually find the min eigen value for A, instead of max eigen of A^-1
     # the spectral norm grows as A^-1 becomes more unstable. Our inverse one shrinks
     sp_norm = compute_spectral_norm3(a)
-
-    # jacobian_matrix_sens = J_d.clip(min=1e-3)/compute_spectral_norm3(a).clip(min=1e-5)
-    # jacobian_matrix_sens = J_d.clip(min=1e-5)*sp_norm.clip(min=1e-5)
-    jacobian_matrix_sens = sp_norm.clip(min=1e-5)# / J_d.clip(min=1e-5)
+    jacobian_matrix_sens = sp_norm #/ J_d.clip(min=1e-5)
     num_vertices = vertices.shape[0]
 
     vertex_sensitivity = torch.full((num_vertices,), 0.0, device=vertices.device)
@@ -270,7 +267,7 @@ def expand_convex_hull(points: torch.Tensor, expand_distance: float, device='cpu
     expanded_vertices = hull_vertices + expand_distance * directions
     return torch.tensor(expanded_vertices, device=device)
 
-def sample_uniform_in_sphere(batch_size, dim, radius=0.0, device=None):
+def sample_uniform_in_sphere(batch_size, dim, radius=0.0, base_radius=0.0, device=None):
     """
     Generate samples uniformly distributed inside a sphere.
 
@@ -293,9 +290,55 @@ def sample_uniform_in_sphere(batch_size, dim, radius=0.0, device=None):
     samples = samples / samples.norm(dim=0, keepdim=True)
     
     # Sample radii uniformly with proper weighting for volume
-    radii = torch.rand(batch_size, device=device).pow(1 / dim) * radius
+    radii = torch.rand(batch_size, device=device).pow(1 / dim) * radius + base_radius
     
     # Scale samples by the radii
     samples = samples * radii.unsqueeze(-1)
 
     return samples
+
+def build_tv_struct(verts, tets, device=None):
+    """
+    verts : (V,3)  float32/64
+    tets  : (T,4)  int64
+    returns:
+        pairs  : (M,2) int64   neighbouring-tet indices
+        areas  : (M,)  float32
+    """
+    if device is None: device = verts.device
+    T = tets.shape[0]
+
+    # ---- all faces -------------------------------------------------
+    face_lists = torch.stack([
+        tets[:, (1,2,3)],
+        tets[:, (0,2,3)],
+        tets[:, (0,1,3)],
+        tets[:, (0,1,2)],
+    ], dim=1).reshape(-1, 3)                                    # (4T,3)
+
+    face_sorted, _ = face_lists.sort(dim=1)                     # canonical key
+    owner_tet = torch.arange(T, device=device).repeat_interleave(4)
+
+    # ---- group identical faces ------------------------------------
+    uniq, inv, counts = torch.unique(face_sorted, dim=0,
+                                     return_inverse=True,
+                                     return_counts=True)
+    interior = counts == 2                                      # only faces with 2 owners
+    mask      = interior[inv]                                   # (4T,) boolean
+    face_rows = torch.nonzero(mask, as_tuple=False)[:,0]        # rows belonging to int. faces
+
+    # bucket rows by face id, then pick the two tet owners
+    face_id   = inv[face_rows]
+    sort_idx  = torch.argsort(face_id)
+    face_rows = face_rows[sort_idx]
+    face_id   = face_id[sort_idx]
+
+    owners    = owner_tet[face_rows].reshape(-1,2)              # (M,2) neighbouring tets
+
+    # ---- geometric weight -----------------------------------------
+    fverts = verts[face_lists[face_rows]]                        # (M,3,3)
+    v01 = fverts[:,1] - fverts[:,0]
+    v02 = fverts[:,2] - fverts[:,0]
+    areas = 0.5 * torch.linalg.norm(torch.cross(v01, v02), dim=1)
+
+    return owners, areas

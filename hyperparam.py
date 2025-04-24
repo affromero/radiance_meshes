@@ -98,8 +98,8 @@ def run_test(test_params, gpu_id):
     
     # Merge the original test parameters with the result so that the final row has both.
     merged_result = {}
-    merged_result.update(test_params)  # Query parameters from the CSV.
     merged_result.update(data)         # JSON output and additional metadata.
+    merged_result.update(test_params)  # Query parameters from the CSV.
     return merged_result
 
 def write_csv(aggregated_results, output_csv, csv_lock):
