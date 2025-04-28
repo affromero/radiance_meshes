@@ -198,15 +198,15 @@ class Model(nn.Module):
         return normed_cc, features
 
     @staticmethod
-    def init_from_pcd(point_cloud, cameras, device, num_lights, ext_convex_hull, voxel_size=0.05, **kwargs):
+    def init_from_pcd(point_cloud, cameras, device, num_lights, ext_convex_hull,
+                      voxel_size=0.00, init_repeat=3, **kwargs):
         torch.manual_seed(2)
 
         vertices = torch.as_tensor(point_cloud.points).float()
 
         dist = torch.clamp_min(distCUDA2(vertices.cuda()), 0.0000001).sqrt().cpu()
 
-        repeats = 3
-        vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
+        vertices = vertices.reshape(-1, 1, 3).expand(-1, init_repeat, 3)
         vertices = vertices + torch.randn(*vertices.shape) * dist.reshape(-1, 1, 1)
         vertices = vertices.reshape(-1, 3)
 

@@ -181,7 +181,7 @@ def circumcenter_jacobian(vertices):
 
 # @torch.jit.script
 def compute_vertex_sensitivity(indices: torch.Tensor, vertices: torch.Tensor,
-                               normalized_circumcenter: torch.Tensor) -> torch.Tensor:
+                               normalized_circumcenter: torch.Tensor, contract_points: bool) -> torch.Tensor:
     """
     Compute mean sensitivity for each vertex by vectorizing the computation.
     
@@ -218,7 +218,8 @@ def compute_vertex_sensitivity(indices: torch.Tensor, vertices: torch.Tensor,
 
     # only use sp_norm here because the perturbations are applied in contracted space
     # multiply by J_d to cancel out contracted perturbations
-    return J_d * sp_norm, vertex_sensitivity.reshape(num_vertices, -1)
+    tet_sens = J_d * sp_norm if contract_points else sp_norm
+    return tet_sens, vertex_sensitivity.reshape(num_vertices, -1)
 
 def fibonacci_spiral_on_sphere(n_points: int, 
                                radius: float = 1.0, 

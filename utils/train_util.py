@@ -117,7 +117,7 @@ def safe_sin(x):
 
 
 def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.1,
-           pre_multi=500, ladder_p=-0.1, clip_multi=1e-1,
+           scene_scaling=1, clip_multi=1e-1,
            **kwargs):
     device = model.device
     fy = fov2focal(camera.fovy, camera.image_height)
@@ -159,7 +159,7 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         if clip_multi is not None:
             with torch.no_grad():
                 tet_sens, sensitivity = topo_utils.compute_vertex_sensitivity(model.indices[mask],
-                                                                            vertices, normed_cc)
+                                                                            vertices, normed_cc, model.contract_vertices)
                 scaling = clip_multi*sensitivity.reshape(-1, 1).clip(min=1e-5)
             vertices = train_util.ClippedGradients.apply(vertices, scaling)
             extras['normed_cc'] = normed_cc
@@ -175,8 +175,7 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         world_view_transform,
         K,
         cam_pos,
-        pre_multi,
-        ladder_p,
+        scene_scaling,
         min_t,
         camera.fovy,
         camera.fovx)

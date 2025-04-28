@@ -8,7 +8,7 @@ from utils.train_util import fov2focal
 from data.camera import Camera
 from utils.ssim import ssim
 
-def render_err(gt_image, camera: Camera, model, tile_size=16, min_t=0.1, lambda_ssim=0.2, **kwargs):
+def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, min_t=0.1, lambda_ssim=0.2, **kwargs):
     device = model.device
     indices = model.indices
     vertices = model.vertices
@@ -98,8 +98,7 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, min_t=0.1, lambda_
         world_view_transform=world_view_transform,
         K=K,
         cam_pos=cam_pos,
-        pre_multi=pre_multi,
-        ladder_p=ladder_p,
+        scene_scaling=scene_scaling,
         min_t=min_t,
         fovy=fovy,
         fovx=fovx,
@@ -143,6 +142,7 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, min_t=0.1, lambda_
         world_view_transform=world_view_transform,
         K=K,
         cam_pos=cam_pos,
+        scene_scaling=scene_scaling,
         min_t=min_t,
         fovy=fovy,
         fovx=fovx,

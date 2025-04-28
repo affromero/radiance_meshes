@@ -10,7 +10,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
     def forward(ctx, 
                 sorted_tetra_idx, tile_ranges,
                 indices, vertices, tet_density, render_grid,
-                world_view_transform, K, cam_pos, pre_multi, ladder_p, min_t,
+                world_view_transform, K, cam_pos, scene_scaling, min_t,
                 fovy, fovx, device="cuda"):
         distortion_img = torch.zeros((render_grid.image_height, 
                                   render_grid.image_width, 5), 
@@ -48,8 +48,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
             world_view_transform=world_view_transform,
             K=K,
             cam_pos=cam_pos,
-            pre_multi=pre_multi,
-            ladder_p=ladder_p,
+            scene_scaling=scene_scaling,
             min_t=min_t,
             fovy=fovy,
             fovx=fovx,
@@ -75,8 +74,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         ctx.fovy = fovy
         ctx.fovx = fovx
         ctx.min_t = min_t
-        ctx.ladder_p = ladder_p
-        ctx.pre_multi = pre_multi
+        ctx.scene_scaling = scene_scaling
 
         return output_img, distortion_img, tet_alive
 
@@ -90,8 +88,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         fovy = ctx.fovy
         fovx = ctx.fovx
         min_t = ctx.min_t
-        ladder_p = ctx.ladder_p
-        pre_multi = ctx.pre_multi
+        scene_scaling = ctx.scene_scaling
 
         vertices_grad = torch.zeros_like(vertices)
         tet_density_grad = torch.zeros_like(tet_density)
@@ -124,9 +121,8 @@ class AlphaBlendTiledRender(torch.autograd.Function):
             world_view_transform=world_view_transform,
             K=K,
             cam_pos=cam_pos,
-            pre_multi=pre_multi,
-            ladder_p=ladder_p,
             min_t=min_t,
+            scene_scaling=scene_scaling,
             fovy=fovy,
             fovx=fovx,
             tile_height=render_grid.tile_height,
@@ -143,4 +139,4 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         # ic("abb", time.time()-st)
         
         return (None, None, None, vertices_grad, tet_density_grad, 
-                None, None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None)

@@ -98,16 +98,10 @@ DistortionState5 update_distortion_state(
     DistortionState5 old_state,
     float T,
     float density,
-    float2 dist,
-    no_diff float pre_multi,
-    no_diff float ladder_p)
+    float2 dist)
 {
-    // float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    // float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
-    // float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    // float end = dist.y;  // tukey_power_ladder(dist.y*pre_multi, ladder_p);
-    no_diff float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    no_diff float end = dist.y;  // tukey_power_ladder(dist.y*pre_multi, ladder_p);
+    no_diff float start = dist.x;//tukey_power_ladder(dist.x, ladder_p);
+    no_diff float end = dist.y;  // tukey_power_ladder(dist.y, ladder_p);
     float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
     float d = density;
 
@@ -130,17 +124,11 @@ DistortionState5 undo_distortion_state(
     DistortionState5 new_state,
     float T,
     float density,
-    float2 dist,
-    float pre_multi,
-    float ladder_p)
+    float2 dist)
 {
-    // float start = tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    // float end = tukey_power_ladder(dist.y*pre_multi, ladder_p);
-    // float start = dist.x;
-    // float end = dist.y;
-    float start = dist.x;//tukey_power_ladder(dist.x*pre_multi, ladder_p);
-    float end = dist.y;//tukey_power_ladder(dist.y*pre_multi, ladder_p);
-    float scaling = 1;//no_diff scale_dist((dist.x+dist.y)*0.5);
+    float start = dist.x;
+    float end = dist.y;
+    float scaling = 1;
     float d = density;
 
     float m0 = moment_0_int(start, end, d, T);
@@ -181,20 +169,20 @@ struct AlphaOut: IDifferentiable {
 };
 
 [Differentiable]
-AlphaOut update_alpha_out(AlphaOut prev, CtrlPt ctrl, no_diff float pre_multi, no_diff float ladder_p) {
+AlphaOut update_alpha_out(AlphaOut prev, CtrlPt ctrl) {
     float T = prev.rgba.a;
     return {
         update_pixel_state(prev.rgba, ctrl.rgba),
-        update_distortion_state(prev.distortion_state, T, ctrl.density, ctrl.dist, pre_multi, ladder_p)
+        update_distortion_state(prev.distortion_state, T, ctrl.density, ctrl.dist)
     };
 }
 
-AlphaOut undo_alpha_out(AlphaOut curr, CtrlPt ctrl, no_diff float pre_multi, no_diff float ladder_p) {
+AlphaOut undo_alpha_out(AlphaOut curr, CtrlPt ctrl) {
     float4 pix_state = undo_pixel_state(curr.rgba, ctrl.rgba);
     float T = pix_state.a;
     return {
         pix_state,
-        undo_distortion_state(curr.distortion_state, T, ctrl.density, ctrl.dist, pre_multi, ladder_p)
+        undo_distortion_state(curr.distortion_state, T, ctrl.density, ctrl.dist)
     };
 }
 
@@ -208,9 +196,8 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                    TensorView<int32_t> n_contributors,
                    TensorView<bool> tet_alive,
                    no_diff Camera cam,
-                   no_diff float ladder_p,
-                   no_diff float pre_multi,
                    no_diff float min_t,
+                   no_diff float scene_scaling,
                    uint32_t2 pix_coord,
                    uint32_t tile_idx_start,
                    uint32_t tile_idx_end,
@@ -233,6 +220,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
     uint32_t thread_rank = cudaThreadIdx().y * cudaBlockDim().x + cudaThreadIdx().x;
     //bool print = thread_rank == 0;
     bool print = false;
+
 
     Ray ray = get_ray(cam, center_pix_coord, min_t);
     // if (print) {
@@ -262,7 +250,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                 SplatTetrahedra_interp g = collected_splats[j];
                 CtrlPt tetra_ctrl;
                 if (evaluate_tetra_interp(g, ray.o, ray.d, min_t, tetra_ctrl) && tetra_ctrl.rgba.a > 0) {
-                    AlphaOut new_ao = update_alpha_out(ao, tetra_ctrl, pre_multi, ladder_p);
+                    AlphaOut new_ao = update_alpha_out(ao, tetra_ctrl);
                     ao = new_ao;
                     // tet_alive[collected_idx[j]] = true;
                     // if (pix_coord.x == 3 && pix_coord.y == 0) {
@@ -298,9 +286,8 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                      TensorView<int32_t> n_contributors,
                      TensorView<bool> tet_alive,
                      Camera cam,
-                     no_diff float ladder_p,
-                     no_diff float pre_multi,
                      no_diff float min_t,
+                     no_diff float scene_scaling,
                      uint32_t2 pix_coord,
                      uint32_t tile_idx_start,
                      uint32_t tile_idx_end,
@@ -373,7 +360,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                     // }
 
                     // Undo pixel state
-                    ao = undo_alpha_out(ao, tetra_ctrl, pre_multi, ladder_p);
+                    ao = undo_alpha_out(ao, tetra_ctrl);
 
                     // Back-prop automatically through blending and gaussian evaluation.
                     DifferentialPair<SplatTetrahedra_interp> dp_g = diffPair(g);
@@ -382,9 +369,17 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                     DifferentialPair<CtrlPt> dp_tetra_ctrl = diffPair(tetra_ctrl);
                     DifferentialPair<AlphaOut> dp_ao = diffPair(ao);
 
-                    bwd_diff(update_alpha_out)(dp_ao, dp_tetra_ctrl, pre_multi, ladder_p, d_ao);
+                    bwd_diff(update_alpha_out)(dp_ao, dp_tetra_ctrl, d_ao);
                     d_ao = dp_ao.getDifferential();
-                    bwd_diff(evaluate_tetra_interp)(dp_g, dp_ray_o, dp_ray_d, min_t, dp_tetra_ctrl.d);
+                    float midpt = (tetra_ctrl.dist.x+tetra_ctrl.dist.y)/2;
+                    float grad_scale = min(1, midpt*midpt / scene_scaling / scene_scaling);
+                    //float grad_scale = midpt*midpt / scene_scaling / scene_scaling;
+                    CtrlPt.Differential d_tetra_scale = {
+                        grad_scale * dp_tetra_ctrl.d.rgba,
+                        grad_scale * dp_tetra_ctrl.d.dist,
+                        grad_scale * dp_tetra_ctrl.d.density,
+                    };
+                    bwd_diff(evaluate_tetra_interp)(dp_g, dp_ray_o, dp_ray_d, min_t, d_tetra_scale);
                     // bwd_diff(evaluate_tetra_2D)(dp_g, cam, min_t, dp_center_pix_coord, dp_tetra_ctrl.d);
                     bwd_diff(load_tet_alphablend_interp)(g_idx, vertices, indices, tet_density, dp_g.d);
 
@@ -415,9 +410,8 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
                  TensorView<float> world_view_transform,
                  TensorView<float> K,
                  TensorView<float> cam_pos,
-                 no_diff float ladder_p,
-                 no_diff float pre_multi,
                  no_diff float min_t,
+                 no_diff float scene_scaling,
                  no_diff float fovy,
                  no_diff float fovx,
                  int tile_height,
@@ -445,8 +439,8 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
         n_contributors,
         tet_alive,
         cam,
-        ladder_p, pre_multi,
-        min_t,
+        min_t, 
+        scene_scaling,
         pix_coord,
         tile_idx_start,
         tile_idx_end,
@@ -478,6 +472,7 @@ void kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                   TensorView<int32_t> n_contributors,
                   Camera cam,
                   no_diff float min_t,
+                  no_diff float scene_scaling,
                   uint32_t2 pix_coord,
                   uint32_t tile_idx_start,
                   uint32_t tile_idx_end,
@@ -540,11 +535,12 @@ void kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     // Undo pixel state
                     current_pixel_state = undo_pixel_state(current_pixel_state, tetra_ctrl.rgba);
 
-                    float err = current_pixel_state.a * tetra_ctrl.rgba.a * pixel_err;
+                    float midpt = 0.5 * (tetra_ctrl.dist.x + tetra_ctrl.dist.y);
+                    float grad_scale = min(1, midpt*midpt / scene_scaling / scene_scaling);
+                    float err = current_pixel_state.a * tetra_ctrl.rgba.a * pixel_err * grad_scale;
                     float surface = tetra_ctrl.dist.x;
-                    // float midpt = 0.5 * (tetra_ctrl.dist.x + tetra_ctrl.dist.y);
-                    float midpt = tetra_ctrl.dist.y;
-                    float contrib = tetra_ctrl.rgba.a * surface + (1 - tetra_ctrl.rgba.a) * midpt;
+                    float endpt = tetra_ctrl.dist.y;
+                    float contrib = tetra_ctrl.rgba.a * surface + (1 - tetra_ctrl.rgba.a) * endpt;
                     if (contrib < 2*min_t) continue;
                     float3 contrib_pt = contrib * ray.d + ray.o;
                     // printf("(%i: %f, %f, %f)", g_idx, current_pixel_state.a, tetra_ctrl.rgba.a, pixel_err);
@@ -583,6 +579,7 @@ void calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                  TensorView<float> K,
                  TensorView<float> cam_pos,
                  no_diff float min_t,
+                 no_diff float scene_scaling,
                  no_diff float fovy,
                  no_diff float fovx,
                  int tile_height,
@@ -616,6 +613,7 @@ void calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
         n_contributors,
         cam,
         min_t,
+        scene_scaling,
         pix_coord,
         tile_idx_start,
         tile_idx_end,

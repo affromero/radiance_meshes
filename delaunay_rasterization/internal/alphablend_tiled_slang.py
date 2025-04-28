@@ -91,6 +91,7 @@ def render_constant_color(indices, vertices,
         'visibility_filter': mask,
         'circumcenters': circumcenter,
         'rgbs': rgbs,
+        'mask': mask,
         'tet_area': tet_area,
     }
 

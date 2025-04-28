@@ -125,8 +125,6 @@ args.ext_convex_hull = False
 
 # Distortion Settings
 args.lambda_dist = 1e-5
-args.ladder_p = -0.25
-args.pre_multi = 10000
 
 # Clone Settings
 args.p_norm = 100
@@ -136,7 +134,7 @@ args.split_mode = "split_point"
 args.clone_schedule = "quadratic"
 args.min_tet_count = 4
 args.prune_density_threshold = 0.0
-args.densify_start = 2500
+args.densify_start = 3000
 args.densify_end = 15000
 args.num_samples = 200
 args.densify_interval = 500
@@ -153,6 +151,7 @@ args.lambda_color = 0.0
 args.lambda_tv = 0.0
 args.density_threshold = 0.0
 args.voxel_size = 0.00
+args.init_repeat = 3
 
 # Bilateral grid arguments
 # Bilateral grid parameters
@@ -275,7 +274,7 @@ for iteration in progress_bar:
 
     st = time.time()
     bg = 0
-    render_pkg = render(camera, model, bg=bg, clip_multi=tet_optim.clip_multi, **args.as_dict())
+    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, clip_multi=tet_optim.clip_multi, **args.as_dict())
     # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
     #          profile_memory=True, with_stack=True) as prof:
     #     with record_function("model_inference"):
@@ -402,7 +401,7 @@ for iteration in progress_bar:
         for camera in sampled_cameras:
             with torch.no_grad():
                 target = camera.original_image.cuda()
-                tet_err, extras = render_err(target, camera, model, tile_size=args.tile_size, lambda_ssim=args.clone_lambda_ssim)
+                tet_err, extras = render_err(target, camera, model, scene_scaling=model.scene_scaling, tile_size=args.tile_size, lambda_ssim=args.clone_lambda_ssim)
                 # tet_err = tet_err / extras['tet_area'].clip(min=1).reshape(-1, 1)
                 visible = extras['tet_count'] > args.min_tet_count
                 if args.p_norm > 10:
@@ -451,6 +450,8 @@ for iteration in progress_bar:
                 image = render_pkg['render']
                 binary_im = (image.permute(1, 2, 0)*255).clip(min=0, max=255).cpu().numpy().astype(np.uint8)
                 imageio.imwrite(args.output_path / f'densify{iteration}.png', binary_im)
+                dens = binary_color[clone_mask & render_pkg['mask']]
+                ic(dens.mean(), dens.min())
 
                 clone_indices = model.indices[clone_mask]
 

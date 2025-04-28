@@ -1,0 +1,12 @@
+weight_decay,lambda_dist,prune_density_threshold,test_SSIM,error,test_PSNR,gpu_id,test_LPIPS,density_threshold,output_folder,psnr
+1.00E-02,1.00E-05,5.00E-03,0.7928152084350586,,25.27484893798828,1,0.24807870388031006,5.00E-03,output/ld1.00E-05_wd1.00E-02_pdt5.00E-03_dt5.00E-03,26.271699195360732
+1.00E-02,1.00E-05,1.00E-03,0.7992387413978577,,25.617849349975586,2,0.23766332864761353,1.00E-03,output/ld1.00E-05_wd1.00E-02_pdt1.00E-03_dt1.00E-03,26.7875585478086
+1.00E-02,0,5.00E-04,0.7983424663543701,,25.524877548217773,3,0.23849016427993774,5.00E-04,output/ld0_wd1.00E-02_pdt5.00E-04_dt5.00E-04,26.895602944061515
+1.00E-02,1.00E-05,5.00E-04,0.7973804473876953,,25.39794921875,0,0.24220649898052216,5.00E-04,output/ld1.00E-05_wd1.00E-02_pdt5.00E-04_dt5.00E-04,26.835835023316335
+1.00E-02,0,5.00E-03,0.7908944487571716,,25.496530532836914,0,0.2488434910774231,5.00E-03,output/ld0_wd1.00E-02_pdt5.00E-03_dt5.00E-03,26.34507077451576
+5.00E-02,0,0,0.8005200028419495,,25.48777961730957,2,0.23671798408031464,0,output/ld0_wd5.00E-02_pdt0_dt0,26.589120610077607
+0.1,0,0,,Process failed and no JSON output file found,,3,,0,output/ld0_wd0.1_pdt0_dt0,
+1.00E-02,0,1.00E-03,,Process failed and no JSON output file found,,1,,1.00E-03,output/ld0_wd1.00E-02_pdt1.00E-03_dt1.00E-03,
+0.5,0,0,,Process failed and no JSON output file found,,0,,0,output/ld0_wd0.5_pdt0_dt0,
+1,0,0,,Process failed and no JSON output file found,,1,,0,output/ld0_wd1_pdt0_dt0,
+10,0,0,,Process failed and no JSON output file found,,2,,0,output/ld0_wd10_pdt0_dt0,
