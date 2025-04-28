@@ -288,7 +288,7 @@ def sample_uniform_in_sphere(batch_size, dim, radius=0.0, base_radius=0.0, devic
     samples = torch.randn(batch_size, dim, device=device)
     
     # Normalize each vector to lie on the unit sphere
-    samples = samples / samples.norm(dim=0, keepdim=True)
+    samples = samples / samples.norm(dim=1, keepdim=True)
     
     # Sample radii uniformly with proper weighting for volume
     radii = torch.rand(batch_size, device=device).pow(1 / dim) * radius + base_radius

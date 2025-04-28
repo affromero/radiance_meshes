@@ -402,7 +402,9 @@ for iteration in progress_bar:
             with torch.no_grad():
                 target = camera.original_image.cuda()
                 tet_err, extras = render_err(target, camera, model, scene_scaling=model.scene_scaling, tile_size=args.tile_size, lambda_ssim=args.clone_lambda_ssim)
-                # tet_err = tet_err / extras['tet_area'].clip(min=1).reshape(-1, 1)
+                norm = extras['tet_count'].clip(min=1).reshape(-1, 1).sqrt()
+                tet_err = tet_err / norm
+                tet_moments = tet_moments / norm
                 visible = extras['tet_count'] > args.min_tet_count
                 if args.p_norm > 10:
                     replace = (tet_err[:, 3] > tet_moments[:, 3]) & visible
@@ -450,8 +452,9 @@ for iteration in progress_bar:
                 image = render_pkg['render']
                 binary_im = (image.permute(1, 2, 0)*255).clip(min=0, max=255).cpu().numpy().astype(np.uint8)
                 imageio.imwrite(args.output_path / f'densify{iteration}.png', binary_im)
-                dens = binary_color[clone_mask & render_pkg['mask']]
-                ic(dens.mean(), dens.min())
+                dens = model.calc_tet_density()
+                alpha = model.calc_tet_alpha()
+                ic(dens[clone_mask].mean(), dens[clone_mask].min(), alpha[clone_mask].min(), rgbs_threshold)
 
                 clone_indices = model.indices[clone_mask]
 

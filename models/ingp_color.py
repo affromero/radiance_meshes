@@ -118,7 +118,6 @@ class iNGPDW(nn.Module):
         n = torch.arange(self.L, device=x.device).reshape(1, 1, -1)
         erf_x = safe_div(torch.tensor(1.0, device=x.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
         scaling = torch.erf(erf_x)
-
         output = output * scaling
         output = self.network(output.reshape(-1, self.L * self.dim))
         return output
@@ -207,7 +206,7 @@ class Model(nn.Module):
         dist = torch.clamp_min(distCUDA2(vertices.cuda()), 0.0000001).sqrt().cpu()
 
         vertices = vertices.reshape(-1, 1, 3).expand(-1, init_repeat, 3)
-        vertices = vertices + torch.randn(*vertices.shape) * dist.reshape(-1, 1, 1)
+        vertices = vertices + 1e-1*torch.randn(*vertices.shape) # * dist.reshape(-1, 1, 1)
         vertices = vertices.reshape(-1, 3)
 
         # Convert BasicPointCloud to Open3D PointCloud

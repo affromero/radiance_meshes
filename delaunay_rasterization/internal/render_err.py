@@ -112,11 +112,9 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
                     render_grid.grid_height, 1)
     )
     torch.cuda.synchronize()
-    alpha = 1-output_img.permute(2,0,1)[3, ...]
-    render_img = output_img.permute(2,0,1)[:3, ...].clip(min=0, max=1)
-    # l2_err = ((render_img - gt_image)**2).mean(dim=0)
+    render_img = output_img.permute(2,0,1)[:3, ...]#.clip(min=0, max=1)
     l1_err = ((render_img - gt_image).abs()).mean(dim=0)
-    ssim_err = (1-ssim(render_img, gt_image).mean(dim=0)).clip(min=0, max=0)
+    ssim_err = (1-ssim(render_img, gt_image).mean(dim=0)).clip(min=0, max=1)
     pixel_err = ((1-lambda_ssim) * l1_err + lambda_ssim * ssim_err).contiguous()
     assert(pixel_err.shape[0] == render_grid.image_height)
     assert(pixel_err.shape[1] == render_grid.image_width)
@@ -155,10 +153,10 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
                     render_grid.grid_height, 1)
     )
     torch.cuda.synchronize()
-    weight = tet_err[:, 3:4]
-    weight_clip = weight.clip(max=pixel_err.max())
-    ratio = weight_clip / weight.clip(min=1e-5)
-    tet_err = tet_err * ratio
+    # weight = tet_err[:, 3:4]
+    # weight_clip = weight.clip(max=pixel_err.max())
+    # ratio = weight_clip / weight.clip(min=1e-5)
+    # tet_err = tet_err * ratio
     # ic((tet_area > 2).float().mean(), tet_area.mean())
     # tet_err = torch.where(mask, tet_err, 0)
 
