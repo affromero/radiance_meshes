@@ -37,11 +37,15 @@ class EvalSH(Function):
         sh_degree: int
     ):
         block_size = 64
-        rayo = rayo.reshape(3).contiguous()
-        means = means.contiguous()
+        rayo = rayo.reshape(3).contiguous().float()
+        means = means.contiguous().float()
         sh0 = sh0.contiguous()
         features = features.contiguous()
-        color = torch.zeros_like(means)
+        color = torch.zeros(means.shape, device=means.device, dtype=features.dtype)
+        assert(means.shape[0] == sh0.shape[0])
+        assert(features.shape[0] == sh0.shape[0])
+        sh_dim = ((sh_degree+1)**2-1)
+        assert(sh_dim <= features.shape[1])
         ctx.sh_degree = sh_degree
         num_prim = means.shape[0]
         kernels.sh_kernel(

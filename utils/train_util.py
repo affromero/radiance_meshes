@@ -285,3 +285,37 @@ def pad_image2even(im, fnp=np):
     im_full = fnp.zeros((nh, nw, 3), dtype=im.dtype)
     im_full[:h, :w] = im
     return im_full
+
+class SpikingLR:
+    def __init__(self, duration, max_steps, base_function,
+                 peak_start, peak_interval, peak_end,
+                 peak_lr_init, peak_lr_final):
+        self.duration = duration
+        self.base_function = base_function
+        self.max_steps = max_steps
+
+        self.peak_start = peak_start
+        self.peak_interval = peak_interval
+        self.peak_end = peak_end
+
+        self.peak_lr_init = peak_lr_init
+        self.peak_lr_final = peak_lr_final
+
+    def peak_height_fn(self, i):
+        # return i / self.max_steps * (self.peak_lr_final - self.peak_lr_init) + self.peak_lr_init
+        return self.peak_lr_init
+    
+    def peak_fn(self, i, height):
+        return height * math.exp(-i * 6/self.duration + 2/self.duration) / math.exp(2/self.duration)
+
+    def __call__(self, iteration):
+        base_f = self.base_function(iteration)
+        if iteration < self.peak_start:
+            return base_f
+        elif iteration > self.peak_end:
+            last_peak = iteration - self.peak_end
+        else:
+            last_peak = (iteration - self.peak_start) % self.peak_interval
+        peak_ind = iteration - last_peak
+        height = self.peak_height_fn(peak_ind) - self.base_function(peak_ind)
+        return base_f + self.peak_fn(last_peak, height)

@@ -76,7 +76,7 @@ args = Args()
 args.tile_size = 16
 args.image_folder = "images_4"
 args.eval = False
-args.dataset_path = Path("/optane/nerf_datasets/360/garden")
+args.dataset_path = Path("/data/nerf_datasets/360/garden")
 args.output_path = Path("output/test/")
 args.iterations = 10000
 args.max_steps = 30000
@@ -90,7 +90,7 @@ args.final_lights_lr = 5e-3
 args.lights_lr_delay = 500
 args.color_lr = 1e-2
 args.final_color_lr = 1e-2
-args.num_lights = 3
+args.max_sh_deg = 3
 args.sh_interval = 2000
 args.sh_step = 1
 
@@ -108,6 +108,7 @@ args.density_offset = -4
 args.weight_decay = 0.01
 args.hashmap_dim = 4
 args.grad_clip = 1e-2
+args.spike_duration = 50
 
 # Vertex Settings
 args.lr_delay = 50
@@ -150,8 +151,8 @@ args.lambda_density = 0.0
 args.lambda_color = 0.0
 args.lambda_tv = 0.0
 args.density_threshold = 0.0
-args.voxel_size = 0.00
-args.init_repeat = 3
+args.voxel_size = 0.05
+args.init_repeat = 10
 
 # Bilateral grid arguments
 # Bilateral grid parameters
@@ -175,7 +176,7 @@ if len(args.ckpt) > 0:
     model = Model.load_ckpt(Path(args.ckpt), device)
 else:
     model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
-                                max_lights = args.num_lights if args.sh_interval <= 0 else 0,
+                                current_sh_deg = args.max_sh_deg if args.sh_interval <= 0 else 0,
                                 **args.as_dict())
 min_t = args.min_t = args.base_min_t * model.scene_scaling.item()
 ic(args.min_t)
@@ -215,6 +216,13 @@ xs = list(range(N))
 ys = [target_num(i+1) for i in xs]
 fig = tpl.figure()
 fig.plot(xs, ys, width=100, height=20)
+fig.show()
+
+print("Encoding LR")
+xs = list(range(args.iterations))
+ys = [tet_optim.encoder_scheduler_args(x) for x in xs]
+fig = tpl.figure()
+fig.plot(xs, ys, width=150, height=20)
 fig.show()
 
 densification_sampler = SimpleSampler(len(train_cameras), args.num_samples)
@@ -350,7 +358,7 @@ for iteration in progress_bar:
     tet_optim.main_step()
     tet_optim.main_zero_grad()
 
-    if do_sh_step:
+    if do_sh_step and tet_optim.sh_optim is not None:
         tet_optim.sh_optim.step()
         tet_optim.sh_optim.zero_grad()
 
@@ -552,17 +560,6 @@ video_writer.release()
 torch.cuda.synchronize()
 torch.cuda.empty_cache()
 
-with torch.no_grad():
-    epath = cam_util.generate_cam_path(train_cameras, 400)
-    eimages = []
-    for camera in tqdm(epath):
-        render_pkg = render(camera, model, min_t=min_t, tile_size=args.tile_size)
-        image = render_pkg['render']
-        image = image.permute(1, 2, 0)
-        image = image.detach().cpu().numpy()
-        eimages.append(image)
-
-mediapy.write_video(args.output_path / "rotating.mp4", eimages)
 model.save2ply(args.output_path / "ckpt.ply")
 torch.save(model.state_dict(), args.output_path / "ckpt.pth")
 
@@ -585,3 +582,14 @@ with (args.output_path / "alldata.json").open("w") as f:
         **results
     )
     json.dump(all_data, f, cls=CustomEncoder)
+
+with torch.no_grad():
+    epath = cam_util.generate_cam_path(train_cameras, 400)
+    eimages = []
+    for camera in tqdm(epath):
+        render_pkg = render(camera, model, min_t=min_t, tile_size=args.tile_size)
+        image = render_pkg['render']
+        image = image.permute(1, 2, 0)
+        image = image.detach().cpu().numpy()
+        eimages.append(image)
+mediapy.write_video(args.output_path / "rotating.mp4", eimages)

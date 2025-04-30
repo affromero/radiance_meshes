@@ -10,7 +10,7 @@ from utils.topo_utils import calculate_circumcenters_torch, fibonacci_spiral_on_
 from utils.safe_math import safe_exp, safe_div, safe_sqrt
 from utils.contraction import contract_mean_std
 from utils.contraction import contract_points, inv_contract_points
-from utils.train_util import safe_exp, get_expon_lr_func
+from utils.train_util import safe_exp, get_expon_lr_func, SpikingLR
 from utils import topo_utils
 from utils.graphics_utils import l2_normalize_th
 from utils import hashgrid
@@ -24,10 +24,12 @@ from scipy.spatial import  Delaunay
 import open3d as o3d
 from data.types import BasicPointCloud
 from simple_knn._C import distCUDA2
+from utils import mesh_util
 
 torch.set_float32_matmul_precision('high')
 
-def init_weights(m, gain):
+def init_linear(m, gain):
+    """Standard Xavier-uniform + zero bias for any Linear layer."""
     if isinstance(m, nn.Linear):
         nn.init.xavier_uniform_(m.weight, gain)
         if m.bias is not None:
@@ -58,26 +60,33 @@ def compute_vertex_colors_from_field(triangle_verts, field_samples, circumcenter
     - The next 6 coefficients (reshaped as (3,2)) define the gradients.
     """
     base = (field_samples[:, :3]) + 0.5  # shape (T, 3)
-    gradients = base.reshape(-1, 3, 1).clip(min=0) * torch.tanh(0.1*field_samples[:, 3:12].reshape(-1, 3, 3))  # shape (T, 3, 3)
+    gradients = base.reshape(-1, 3, 1) * torch.tanh(field_samples[:, 3:12].reshape(-1, 3, 3))  # shape (T, 3, 3)
     offsets = triangle_verts - circumcenters[:, None, :]  # shape (T, 4, 3)
     offsets = l2_normalize_th(offsets)
     grad_contrib = torch.einsum('tcd,tvd->tvc', gradients, offsets)
     vertex_colors = base[:, None, :] + grad_contrib
     return vertex_colors, gradients
 
-@torch.jit.script
-def activate_output(output, indices, vertex_color_raw, circumcenters, vertices, density_offset:float):
+def activate_output(camera_center, output, indices, circumcenters, vertices, current_sh_deg, max_sh_deg, density_offset:float):
     density = safe_exp(output[:, 0:1]+density_offset)
-    field_samples = output[:, 1:]
+    field_samples = output[:, 1:12+1]
+    sh_coeffs = output[:, 13:]
+    tet_color_raw = eval_sh(
+        circumcenters,
+        torch.zeros((output.shape[0], 3), device=vertices.device),
+        sh_coeffs.reshape(-1, (max_sh_deg+1)**2 - 1, 3),
+        camera_center,
+        current_sh_deg) - 0.5
     vcolors, _ = compute_vertex_colors_from_field(
         vertices[indices].detach(), field_samples.float(), circumcenters.float().detach())
-    vcolors = torch.nn.functional.softplus(vertex_color_raw[indices] + vcolors, beta=10)
+    vcolors = torch.nn.functional.softplus(vcolors + tet_color_raw.reshape(-1, 1, 3), beta=10)
     vcolors = vcolors.reshape(-1, 12)
     features = torch.cat([density, vcolors], dim=1)
     return features
 
 class iNGPDW(nn.Module):
     def __init__(self, 
+                 sh_dim=0,
                  scale_multi=0.5,
                  log2_hashmap_size=16,
                  base_resolution=16,
@@ -105,10 +114,14 @@ class iNGPDW(nn.Module):
             nn.SELU(inplace=True),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SELU(inplace=True),
-            nn.Linear(hidden_dim, 1+12)
+            nn.Linear(hidden_dim, 1+12+sh_dim)
         )
         gain = nn.init.calculate_gain('relu')  # for example, if using ReLU activations
-        self.network.apply(lambda m: init_weights(m, gain))
+        self.network.apply(lambda m: init_linear(m, gain))
+        last = self.network[-1]
+        with torch.no_grad():
+            last.weight[3:, :].zero_()
+            last.bias[3:].zero_()
 
     def forward(self, x, cr):
         x = x.detach()
@@ -126,29 +139,28 @@ class Model(nn.Module):
     def __init__(self,
                  vertices: torch.Tensor,
                  ext_vertices: torch.Tensor,
-                 vertex_lights: torch.Tensor,
                  center: torch.Tensor,
                  scene_scaling: float,
                  contract_vertices=True,
                  density_offset=-1,
-                 max_lights=2,
-                 num_lights=2,
+                 current_sh_deg=2,
+                 max_sh_deg=2,
                  light_offset=-3,
                  **kwargs):
         super().__init__()
         self.device = vertices.device
         self.density_offset = density_offset
-        self.num_lights = num_lights
-        self.max_lights = max_lights
+        self.max_sh_deg = max_sh_deg
+        self.current_sh_deg = current_sh_deg
         self.light_offset = light_offset
         self.dir_offset = torch.tensor([
             [0, 0],
             [math.pi, 0],
         ], device=self.device)
-        self.backbone = torch.compile(iNGPDW(**kwargs)).to(self.device)
+        sh_dim = ((1+max_sh_deg)**2-1)*3
+        self.backbone = torch.compile(iNGPDW(sh_dim, **kwargs)).to(self.device)
         self.chunk_size = 408576
 
-        self.vertex_lights = nn.Parameter(vertex_lights)
 
         self.register_buffer('ext_vertices', ext_vertices.to(self.device))
         self.register_buffer('center', center.reshape(1, 3))
@@ -174,12 +186,12 @@ class Model(nn.Module):
         indices = self.indices[mask] if mask is not None else self.indices
         vertices = self.vertices
 
-        vertex_color_raw = eval_sh(
-            vertices,
-            torch.zeros((vertices.shape[0], 3), device=vertices.device),
-            self.vertex_lights.reshape(-1, (self.num_lights+1)**2 - 1, 3),
-            camera.camera_center.to(self.device),
-            self.max_lights) - 0.5
+        # vertex_color_raw = eval_sh(
+        #     vertices,
+        #     torch.zeros((vertices.shape[0], 3), device=vertices.device),
+        #     self.vertex_lights.reshape(-1, (self.max_sh_deg+1)**2 - 1, 3),
+        #     camera.camera_center.to(self.device),
+        #     self.current_sh_deg) - 0.5
 
         outputs = []
         normed_cc = []
@@ -187,9 +199,11 @@ class Model(nn.Module):
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
             circumcenters, normalized, output = self.compute_batch_features(vertices, indices, start, end, circumcenters=all_circumcenters)
-            dvrgbs = activate_output(output, indices[start:end],
-                                     vertex_color_raw, circumcenters,
-                                     vertices, self.density_offset)
+            dvrgbs = activate_output(camera.camera_center.to(self.device),
+                                     output, indices[start:end],
+                                     circumcenters,
+                                     vertices, self.current_sh_deg, self.max_sh_deg,
+                                     self.density_offset)
             normed_cc.append(normalized)
             outputs.append(dvrgbs)
         features = torch.cat(outputs, dim=0)
@@ -197,7 +211,7 @@ class Model(nn.Module):
         return normed_cc, features
 
     @staticmethod
-    def init_from_pcd(point_cloud, cameras, device, num_lights, ext_convex_hull,
+    def init_from_pcd(point_cloud, cameras, device, max_sh_deg, ext_convex_hull,
                       voxel_size=0.00, init_repeat=3, **kwargs):
         torch.manual_seed(2)
 
@@ -249,11 +263,9 @@ class Model(nn.Module):
 
         # num_ext = 1000
         # ext_vertices = fibonacci_spiral_on_sphere(num_ext, 2* pcd_scaling.cpu(), device='cpu') + center.reshape(1, 3).cpu()
-        ic(num_lights)
-        vertex_lights = torch.zeros((vertices.shape[0] + num_ext, ((num_lights+1)**2-1)*3)).to(device)
 
         vertices = nn.Parameter(vertices.cuda())
-        model = Model(vertices, ext_vertices, vertex_lights, center, scaling, num_lights=num_lights, **kwargs)
+        model = Model(vertices, ext_vertices, center, scaling, max_sh_deg=max_sh_deg, **kwargs)
         return model
 
     def compute_batch_features(self, vertices, indices, start, end, circumcenters=None):
@@ -282,9 +294,8 @@ class Model(nn.Module):
         print(f"Loaded {vertices.shape[0]} vertices")
         temp = config.contract_vertices
         config.contract_vertices = False
-        lights = ckpt['vertex_lights']
         ext_vertices = ckpt['ext_vertices']
-        model = Model(vertices.to(device), ext_vertices, lights, ckpt['center'], ckpt['scene_scaling'], **config.as_dict())
+        model = Model(vertices.to(device), ext_vertices, ckpt['center'], ckpt['scene_scaling'], **config.as_dict())
         model.load_state_dict(ckpt)
         model.contract_vertices = temp
         model.min_t = model.scene_scaling * config.base_min_t
@@ -396,7 +407,8 @@ class Model(nn.Module):
     def extract_mesh(self, path, density_threshold=0.5):
         path.mkdir(exist_ok=True, parents=True)
         mask = self.calc_tet_density() > density_threshold
-        meshes = tri_output.extract_meshes(verts.detach().cpu(), self.indices[mask])
+        verts = self.vertices
+        meshes = mesh_util.extract_meshes(verts.detach().cpu().numpy(), self.indices[mask])
         for i, mesh in enumerate(meshes):
             F = mesh['face']['vertex_indices']
             if F > 1000:
@@ -415,11 +427,11 @@ class Model(nn.Module):
             "y": xyz[:, 1],
             "z": xyz[:, 2],
         }
-        vertex_lights = self.vertex_lights.detach().cpu().numpy().astype(np.float32).reshape(-1, (self.num_lights+1)**2 - 1, 3)
-        for i in range(vertex_lights.shape[1]):
-            vertex_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(vertex_lights[:, i, 0])
-            vertex_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(vertex_lights[:, i, 1])
-            vertex_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(vertex_lights[:, i, 2])
+        # vertex_lights = self.vertex_lights.detach().cpu().numpy().astype(np.float32).reshape(-1, (self.max_sh_deg+1)**2 - 1, 3)
+        # for i in range(vertex_lights.shape[1]):
+        #     vertex_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(vertex_lights[:, i, 0])
+        #     vertex_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(vertex_lights[:, i, 1])
+        #     vertex_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(vertex_lights[:, i, 2])
 
         N = self.indices.shape[0]
         densities = np.zeros((N), dtype=np.float32)
@@ -469,7 +481,7 @@ class Model(nn.Module):
         return torch.cat([verts, self.ext_vertices])
 
     def sh_up(self):
-        self.max_lights = min(self.num_lights, self.max_lights+1)
+        self.current_sh_deg = min(self.max_sh_deg, self.current_sh_deg+1)
 
     @torch.no_grad()
     def update_triangulation(self, high_precision=False, density_threshold=0):
@@ -524,6 +536,10 @@ class TetOptimizer:
                  sh_interval: int = 1000,
                  lambda_tv: float = 0.0,
                  lambda_density: float = 0.0,
+                 spike_duration: int = 20,
+                 densify_start: int = 2500,
+                 densify_interval: int = 500,
+                 densify_end: int = 15000,
                  **kwargs):
         self.weight_decay = weight_decay
         self.lambda_color = lambda_color
@@ -539,20 +555,22 @@ class TetOptimizer:
         self.vertex_optim = optim.CustomAdam([
             {"params": [model.contracted_vertices], "lr": self.vert_lr_multi*vertices_lr, "name": "contracted_vertices"},
         ])
-        self.lights_optim = optim.CustomAdam([
-            {"params": [model.vertex_lights], "lr": lights_lr, "name": "vertex_lights"},
-        ])
         self.model = model
         self.tracker_n = 0
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
         self.split_std = split_std
 
-        self.net_scheduler_args = get_expon_lr_func(lr_init=network_lr,
+        base_net_scheduler = get_expon_lr_func(lr_init=network_lr,
                                                 lr_final=final_network_lr,
                                                 lr_delay_mult=1e-8,
                                                 lr_delay_steps=lr_delay,
                                                 max_steps=max_steps)
+
+        self.net_scheduler_args = SpikingLR(
+            spike_duration, max_steps, base_net_scheduler,
+            densify_start, densify_interval, densify_end,
+            network_lr, final_network_lr)
 
         self.sh_interval = sh_interval
         self.sh_scheduler_args = get_expon_lr_func(lr_init=lights_lr,
@@ -561,11 +579,17 @@ class TetOptimizer:
                                                 lr_delay_steps=lights_lr_delay,
                                                 max_steps=max_steps-self.sh_interval)
 
-        self.encoder_scheduler_args = get_expon_lr_func(lr_init=encoding_lr,
+        base_encoder_scheduler = get_expon_lr_func(lr_init=encoding_lr,
                                                 lr_final=final_encoding_lr,
                                                 lr_delay_mult=1e-8,
                                                 lr_delay_steps=lr_delay,
                                                 max_steps=max_steps)
+
+        self.encoder_scheduler_args = SpikingLR(
+            spike_duration, max_steps, base_encoder_scheduler,
+            densify_start, densify_interval, densify_end,
+            encoding_lr, final_encoding_lr)
+
         self.vertex_lr = self.vert_lr_multi*vertices_lr
         self.vertex_scheduler_args = get_expon_lr_func(lr_init=self.vertex_lr,
                                                 lr_final=self.vert_lr_multi*final_vertices_lr,
@@ -588,9 +612,6 @@ class TetOptimizer:
             if param_group["name"] == "network":
                 lr = self.net_scheduler_args(iteration)
                 param_group['lr'] = lr
-        for param_group in self.lights_optim.param_groups:
-            lr = self.sh_scheduler_args(max(iteration-self.sh_interval, 0))
-            param_group['lr'] = lr
         for param_group in self.optim.param_groups:
             if param_group["name"] == "encoding":
                 lr = self.encoder_scheduler_args(iteration)
@@ -604,15 +625,12 @@ class TetOptimizer:
     def update_ema(self):
         self.ema.update()
 
-    def add_points(self, new_verts: torch.Tensor, new_vertex_lights: torch.Tensor):
+    def add_points(self, new_verts: torch.Tensor):
         if self.model.contract_vertices:
             new_verts = self.model.contract(new_verts)
         self.model.contracted_vertices = self.vertex_optim.cat_tensors_to_optimizer(dict(
             contracted_vertices = new_verts
         ))['contracted_vertices']
-        self.model.vertex_lights = self.lights_optim.cat_tensors_to_optimizer(dict(
-            vertex_lights = new_vertex_lights
-        ))['vertex_lights']
         self.model.update_triangulation()
 
     def remove_points(self, mask: torch.Tensor):
@@ -634,22 +652,19 @@ class TetOptimizer:
             r[r.abs() < 1e-2] = 1e-2
             sampled_radius = (r * self.split_std + 1) * radius
             new_vertex_location = l2_normalize_th(sphere_loc) * sampled_radius + circumcenters
-            new_vertex_lights = (self.model.vertex_lights[clone_indices] * barycentric_weights).sum(dim=1)
         elif split_mode == "barycentric":
             barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
             barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
             new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
-            new_vertex_lights = (self.model.vertex_lights[clone_indices] * barycentric_weights).sum(dim=1)
         elif split_mode == "split_point":
             split_point += 1e-4*torch.randn(*split_point.shape, device=self.model.device)
             new_vertex_location = split_point
             barycentric_weights = calc_barycentric(split_point, clone_vertices)
             barycentric_weights = barycentric_weights / (1e-3+barycentric_weights.sum(dim=1, keepdim=True))
             # new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights.unsqueeze(-1)).sum(dim=1)
-            new_vertex_lights = (self.model.vertex_lights[clone_indices] * barycentric_weights.unsqueeze(-1)).sum(dim=1)
         else:
             raise Exception(f"Split mode: {split_mode} not supported")
-        self.add_points(new_vertex_location, new_vertex_lights)
+        self.add_points(new_vertex_location)
         mask = self.model.calc_vert_density() < density_threshold
         print(f"Pruned: {mask.sum()} points")
         self.remove_points(~mask)
@@ -665,7 +680,7 @@ class TetOptimizer:
 
     @property
     def sh_optim(self):
-        return self.lights_optim
+        return None
 
     def clip_gradient(self, grad_clip):
         for module in self.model.backbone.encoding.embeddings:
@@ -673,8 +688,6 @@ class TetOptimizer:
 
     def regularizer(self, render_pkg):
         weight_decay = self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.backbone.encoding.embeddings])
-        mean_sh = (self.model.vertex_lights).abs().mean()
-        sh_decay = self.lambda_color * mean_sh
 
         # m = render_pkg['mask']
         # ic(m.shape, self.model.indices.shape)
@@ -693,7 +706,7 @@ class TetOptimizer:
             density_loss = 0
             tv_loss = 0
 
-        return sh_decay + weight_decay + self.lambda_tv * tv_loss + self.lambda_density * density_loss
+        return weight_decay + self.lambda_tv * tv_loss + self.lambda_density * density_loss
 
     def update_triangulation(self, **kwargs):
         self.model.update_triangulation(**kwargs)

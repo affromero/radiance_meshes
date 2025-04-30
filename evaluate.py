@@ -47,5 +47,9 @@ with torch.no_grad():
         eimages.append(image)
 
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)
-test_util.evaluate_and_save(model, test_cameras, args.output_path, args.tile_size, min_t=model.min_t)
+if args.render_train:
+    splits = zip(['train', 'test'], [train_cameras, test_cameras])
+else:
+    splits = zip(['test'], [test_cameras])
+test_util.evaluate_and_save(model, splits, args.output_path, args.tile_size, min_t=model.min_t)
 model.save2ply(Path('test.ply'))

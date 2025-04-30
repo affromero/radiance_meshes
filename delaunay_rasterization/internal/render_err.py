@@ -31,8 +31,6 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
     assert(indices.device == cam_pos.device)
     st = time.time()
     device = indices.device
-    pre_multi=500
-    ladder_p=-0.1 
     render_grid = RenderGrid(camera.image_height,
                              camera.image_width,
                              tile_height=tile_size,
@@ -55,9 +53,9 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
         vs_tetra.retain_grad()
     except:
         pass
-    # cell_values = torch.zeros((mask.shape[0], 4), device=circumcenter.device)
-    # cell_values[mask] = model.get_cell_values(camera, mask)
-    vertex_color, cell_values = model.get_cell_values(camera)
+    cell_values = torch.zeros((mask.shape[0], 13), device=circumcenter.device)
+    vertex_color, cell_values[mask] = model.get_cell_values(camera, mask)
+    # vertex_color, cell_values = model.get_cell_values(camera)
 
     # torch.cuda.synchronize()
     # st = time.time()
@@ -112,7 +110,12 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
                     render_grid.grid_height, 1)
     )
     torch.cuda.synchronize()
-    render_img = output_img.permute(2,0,1)[:3, ...]#.clip(min=0, max=1)
+    alpha = 1-output_img.permute(2,0,1)[3, ...]
+    render_img = output_img.permute(2,0,1)[:3, ...].clip(min=0, max=1)
+    # im = (render_img.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
+    # plt.imshow(im)
+    # plt.show()
+    # l2_err = ((render_img - gt_image)**2).mean(dim=0)
     l1_err = ((render_img - gt_image).abs()).mean(dim=0)
     ssim_err = (1-ssim(render_img, gt_image).mean(dim=0)).clip(min=0, max=1)
     pixel_err = ((1-lambda_ssim) * l1_err + lambda_ssim * ssim_err).contiguous()
@@ -153,15 +156,7 @@ def render_err(gt_image, camera: Camera, model, tile_size=16, scene_scaling=1, m
                     render_grid.grid_height, 1)
     )
     torch.cuda.synchronize()
-    # weight = tet_err[:, 3:4]
-    # weight_clip = weight.clip(max=pixel_err.max())
-    # ratio = weight_clip / weight.clip(min=1e-5)
-    # tet_err = tet_err * ratio
-    # ic((tet_area > 2).float().mean(), tet_area.mean())
-    # tet_err = torch.where(mask, tet_err, 0)
-
     return tet_err, dict(
-        alpha = alpha,
         tet_area = tet_area,
         tet_count = tet_count,
         pixel_err = pixel_err,
