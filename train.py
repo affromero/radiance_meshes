@@ -96,7 +96,7 @@ args.sh_step = 1
 
 # iNGP Settings
 args.encoding_lr = 6e-3
-args.final_encoding_lr = 6e-3
+args.final_encoding_lr = 6e-4
 args.network_lr = 1e-3
 args.final_network_lr = 1e-3
 args.hidden_dim = 64
@@ -108,7 +108,7 @@ args.density_offset = -4
 args.weight_decay = 0.01
 args.hashmap_dim = 4
 args.grad_clip = 1e-2
-args.spike_duration = 50
+args.spike_duration = 150
 
 # Vertex Settings
 args.lr_delay = 50
@@ -140,7 +140,11 @@ args.densify_end = 15000
 args.num_samples = 200
 args.densify_interval = 500
 args.budget = 2_000_000
-args.lambda_noise = 0
+args.lambda_noise = 0.0
+args.perturb_t = 1-0.005
+args.noise_start = 2000
+args.clone_velocity = 0.1
+args.speed_mul = 100
 
 args.lambda_ssim = 0.2
 args.base_min_t = 0.2
@@ -159,7 +163,7 @@ args.init_repeat = 10
 args.use_bilateral_grid = False
 args.bilateral_grid_shape = [16, 16, 8]
 args.bilateral_grid_lr = 0.003  # Match gsplat's default
-args.lambda_tv = 0.0
+args.lambda_tv_grid = 0.0
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
@@ -234,7 +238,7 @@ if args.use_bilateral_grid:
     print("\nInitializing Bilateral Grid:")
     print(f"- Grid shape: {args.bilateral_grid_shape}")
     print(f"- Learning rate: {args.bilateral_grid_lr}")
-    print(f"- TV loss weight: {args.lambda_tv}")
+    print(f"- TV loss weight: {args.lambda_tv_grid}")
     bil_grids = BilateralGrid(
         len(train_cameras),
         grid_X=args.bilateral_grid_shape[0],
@@ -335,25 +339,20 @@ for iteration in progress_bar:
     tvloss = None
     if args.use_bilateral_grid:
         # Use the configurable lambda_tv parameter (default is 10.0)
-        tvloss = args.lambda_tv * total_variation_loss(bil_grids.grids)
+        tvloss = args.lambda_tv_grid * total_variation_loss(bil_grids.grids)
         loss += tvloss
     # --------------------------------------------------------------
 
     mask = render_pkg['mask']
     cc = render_pkg['normed_cc']
     st = time.time()
-    alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
     # # loss += args.lambda_alpha * (-4 * alphas * (alphas-1)).mean()
     # loss += args.lambda_alpha * - ((alphas * safe_math.safe_log(alphas) + (1-alphas) * safe_math.safe_log(1-alphas))).mean()
     # x = render_pkg['density'][mask]
     # loss += args.lambda_density * (x * (-x**2).exp()).mean()
-    loss.backward()
     # tet_optim.clip_gradient(args.grad_clip)
 
-    v_perturb = compute_v_perturbation(
-        model.indices, model.vertices, cc, alphas,
-        mask, render_pkg['cc_sensitivity'],
-        tet_optim.vertex_lr, k=100, t=(1-0.005))
+    loss.backward()
 
     tet_optim.main_step()
     tet_optim.main_zero_grad()
@@ -363,7 +362,13 @@ for iteration in progress_bar:
         tet_optim.sh_optim.zero_grad()
 
     if do_delaunay:
-        model.perturb_vertices(args.lambda_noise * v_perturb)
+        if iteration > args.noise_start:
+            alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
+            v_perturb = compute_v_perturbation(
+                model.indices, model.vertices, cc, render_pkg['density'],
+                mask, render_pkg['cc_sensitivity'],
+                tet_optim.vertex_lr, k=100, t=args.perturb_t)
+            model.perturb_vertices(args.lambda_noise * v_perturb)
         # circumcenters = model.get_circumcenters()
         # cc_locations.append(
         #     model.contract(circumcenters.detach()).cpu().numpy()
@@ -412,7 +417,6 @@ for iteration in progress_bar:
                 tet_err, extras = render_err(target, camera, model, scene_scaling=model.scene_scaling, tile_size=args.tile_size, lambda_ssim=args.clone_lambda_ssim)
                 norm = extras['tet_count'].clip(min=1).reshape(-1, 1).sqrt()
                 tet_err = tet_err / norm
-                tet_moments = tet_moments / norm
                 visible = extras['tet_count'] > args.min_tet_count
                 if args.p_norm > 10:
                     replace = (tet_err[:, 3] > tet_moments[:, 3]) & visible
@@ -462,7 +466,6 @@ for iteration in progress_bar:
                 imageio.imwrite(args.output_path / f'densify{iteration}.png', binary_im)
                 dens = model.calc_tet_density()
                 alpha = model.calc_tet_alpha()
-                ic(dens[clone_mask].mean(), dens[clone_mask].min(), alpha[clone_mask].min(), rgbs_threshold)
 
                 clone_indices = model.indices[clone_mask]
 
@@ -474,6 +477,19 @@ for iteration in progress_bar:
                 out += f"∇RGBS: {tet_err_weight.mean()} "
                 out += f"target_addition: {target_addition} "
                 print(out)
+
+                # clone vertices
+                raw_verts = model.contracted_vertices
+                stored_state = tet_optim.vertex_optim.get_state_by_name('contracted_vertices')
+                velocity = stored_state['exp_avg'] * args.speed_mul
+                J_d = topo_utils.contraction_jacobian_d_in_chunks(
+                    model.vertices[:model.contracted_vertices.shape[0]]).reshape(-1, 1)
+                speed = torch.linalg.norm(velocity * J_d, dim=1)
+                mask = speed > args.clone_velocity
+                new_verts = (raw_verts + velocity)[mask]
+                print(f"Adding {new_verts.shape[0]} new verts using velocity. Mean velocity: {speed.mean()}")
+                tet_optim.add_points(new_verts, raw_verts=True)
+
             gc.collect()
             torch.cuda.empty_cache()
             vert_alive = torch.zeros((model.contracted_vertices.shape[0]), dtype=bool, device=device)
@@ -497,65 +513,6 @@ for iteration in progress_bar:
 
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 video_writer.release()
-
-
-
-# def pad_point_clouds(cc_locations):
-#     """
-#     Pads all frames in cc_locations to have the same number of points
-#     as the frame with the maximum number of points, padding with zeros.
-
-#     Parameters:
-#         cc_locations (list or array): List/array of frames (num_frames, num_points, 3)
-
-#     Returns:
-#         np.ndarray: Padded cc_locations of shape (num_frames, max_num_points, 3)
-#     """
-#     max_num_points = max(frame.shape[0] for frame in cc_locations)
-
-#     padded_frames = []
-#     for frame in cc_locations:
-#         num_points = frame.shape[0]
-#         if num_points < max_num_points:
-#             padding = np.zeros((max_num_points - num_points, 3))
-#             padded_frame = np.vstack([frame, padding])
-#         else:
-#             padded_frame = frame
-
-#         padded_frames.append(padded_frame)
-
-#     return np.array(padded_frames)
-
-# # cc_locations: (num_frames, num_points, 3) numpy array
-# plotter = pv.Plotter()
-# cc_locations = pad_point_clouds(cc_locations)
-# points = cc_locations[0]
-
-# # Initialize the scatter plot
-# point_cloud = pv.PolyData(points)
-# scatter = plotter.add_mesh(point_cloud, render_points_as_spheres=False, point_size=2.0)
-
-# # Set consistent camera bounds
-# plotter.set_background('white')
-# plotter.show_bounds(bounds=(-2, 2, -2, 2, -2, 2))
-
-# # Create and save the animation
-# plotter.open_movie(str(args.output_path / 'circumcenters.mp4'), framerate=24)
-
-# for i, frame in tqdm(enumerate(cc_locations)):
-#     # Efficiently update points in-place
-#     point_cloud.points = frame
-
-#     # Update the text efficiently
-#     plotter.add_text(f"Frame {i+1}/{len(cc_locations)}", position='upper_edge', font_size=12, name='frame_label')
-
-#     # Write current frame
-#     plotter.write_frame()
-
-#     # Remove only the text (avoid clearing all actors)
-#     plotter.remove_actor('frame_label')
-
-# plotter.close()
 
 torch.cuda.synchronize()
 torch.cuda.empty_cache()
@@ -591,5 +548,5 @@ with torch.no_grad():
         image = render_pkg['render']
         image = image.permute(1, 2, 0)
         image = image.detach().cpu().numpy()
-        eimages.append(image)
+        eimages.append(pad_image2even(image))
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)

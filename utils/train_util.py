@@ -224,20 +224,36 @@ def compute_alpha(indices, vertices, density, mask):
     alpha = 1 - torch.exp(-density[mask].reshape(-1, 1) * edge_lengths.reshape(-1, 1))
     return alpha
 
-@torch.jit.script
-def compute_v_perturbation(inds, verts, cc, alpha, mask, cc_sensitivity, lr:float, k:float=100, t:float=(1-0.005)):
-    inds = inds[mask]
+# @torch.jit.script
+# def compute_v_perturbation(inds, verts, cc, alpha, mask, cc_sensitivity, lr:float, k:float=100, t:float=(1-0.005)):
+#     inds = inds[mask]
+#     device = verts.device
+#     # tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * cc_sensitivity.reshape(-1, 1) * torch.randn((inds.shape[0], 3), device=device)
+#     tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * torch.randn((inds.shape[0], 3), device=device)
+#     ic(tet_perturb[alpha > t].mean())
+#     # tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * torch.randn((inds.shape[0], 3), device=device)
+#     v_perturb = torch.full((verts.shape[0],3), 0.0, device=device)
+#     inds_l = inds.long()
+#     reduce_type = "sum"
+#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 0:1], src=tet_perturb, reduce=reduce_type)
+#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 1:2], src=tet_perturb, reduce=reduce_type)
+#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 2:3], src=tet_perturb, reduce=reduce_type)
+#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 3:4], src=tet_perturb, reduce=reduce_type)
+#     return v_perturb
+#
+# @torch.jit.script
+def compute_v_perturbation(inds, verts, cc, density, mask, cc_sensitivity, lr:float, k:float=100, t:float=(1-0.005)):
+    inds = inds[mask].long()
+    vertex_alpha = torch.zeros((verts.shape[0],), device=inds.device)
     device = verts.device
-    tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * cc_sensitivity.reshape(-1, 1) * torch.randn((inds.shape[0], 3), device=device)
-    # tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * torch.randn((inds.shape[0], 3), device=device)
-    v_perturb = torch.full((verts.shape[0],3), 0.0, device=device)
-    inds_l = inds.long()
 
-    reduce_type = "sum"
-    v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 0:1], src=tet_perturb, reduce=reduce_type)
-    v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 1:2], src=tet_perturb, reduce=reduce_type)
-    v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 2:3], src=tet_perturb, reduce=reduce_type)
-    v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 3:4], src=tet_perturb, reduce=reduce_type)
+    alpha = density.reshape(-1)
+    reduce_type = "amax"
+    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 0], src=alpha, reduce=reduce_type)
+    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 1], src=alpha, reduce=reduce_type)
+    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 2], src=alpha, reduce=reduce_type)
+    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 3], src=alpha, reduce=reduce_type)
+    v_perturb = lr * torch.sigmoid(-k*(vertex_alpha - t)).reshape(-1, 1) * torch.randn((verts.shape[0], 3), device=device)
     return v_perturb
 
 def get_expon_lr_func(

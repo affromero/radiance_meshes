@@ -372,7 +372,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                     bwd_diff(update_alpha_out)(dp_ao, dp_tetra_ctrl, d_ao);
                     d_ao = dp_ao.getDifferential();
                     float midpt = (tetra_ctrl.dist.x+tetra_ctrl.dist.y)/2;
-                    float grad_scale = min(1, midpt*midpt / scene_scaling / scene_scaling);
+                    float grad_scale = min(1, midpt*midpt);// / scene_scaling / scene_scaling);
                     //float grad_scale = midpt*midpt / scene_scaling / scene_scaling;
                     CtrlPt.Differential d_tetra_scale = {
                         grad_scale * dp_tetra_ctrl.d.rgba,
@@ -536,12 +536,11 @@ void kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     current_pixel_state = undo_pixel_state(current_pixel_state, tetra_ctrl.rgba);
 
                     float midpt = 0.5 * (tetra_ctrl.dist.x + tetra_ctrl.dist.y);
-                    float grad_scale = min(1, midpt*midpt / scene_scaling / scene_scaling);
+                    float grad_scale = min(1, midpt*midpt);// / scene_scaling / scene_scaling);
                     float err = current_pixel_state.a * tetra_ctrl.rgba.a * pixel_err * grad_scale;
                     float surface = tetra_ctrl.dist.x;
                     float endpt = tetra_ctrl.dist.y;
                     float contrib = tetra_ctrl.rgba.a * surface + (1 - tetra_ctrl.rgba.a) * endpt;
-                    if (contrib < 2*min_t) continue;
                     float3 contrib_pt = contrib * ray.d + ray.o;
                     // printf("(%i: %f, %f, %f)", g_idx, current_pixel_state.a, tetra_ctrl.rgba.a, pixel_err);
                     float old_val;

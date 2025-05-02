@@ -11,6 +11,14 @@ class CustomAdam:
     def param_groups(self):
         return self.optimizer.param_groups
 
+    def get_state_by_name(self, name):
+        groups = [group for group in self.optimizer.param_groups if name == group['name']]
+        if len(groups) == 0:
+            raise Exception(f"State {name} not found in optimizer")
+        group = groups[0]
+        stored_state = self.optimizer.state.get(group['params'][0], None)
+        return stored_state
+
     def replace_tensor_to_optimizer(self, tensor, name):
         """
         Replace a tensor in the optimizer with a new tensor, maintaining its state if possible.

@@ -6,12 +6,11 @@ from sh_slang.eval_sh import eval_sh
 from gDel3D.build.gdel3d import Del
 from torch import nn
 from icecream import ic
-from utils.topo_utils import calculate_circumcenters_torch, fibonacci_spiral_on_sphere, calc_barycentric, sample_uniform_in_sphere, project_points_to_tetrahedra
+from utils.topo_utils import calculate_circumcenters_torch, fibonacci_spiral_on_sphere, calc_barycentric, sample_uniform_in_sphere, project_points_to_tetrahedra, contraction_jacobian_d_in_chunks
 from utils.safe_math import safe_exp, safe_div, safe_sqrt
 from utils.contraction import contract_mean_std
 from utils.contraction import contract_points, inv_contract_points
-from utils.train_util import safe_exp, get_expon_lr_func, SpikingLR
-from utils import topo_utils
+from utils.train_util import get_expon_lr_func, SpikingLR
 from utils.graphics_utils import l2_normalize_th
 from utils import hashgrid
 from torch.utils.checkpoint import checkpoint
@@ -44,8 +43,6 @@ def pre_calc_cell_values(vertices, indices, center, scene_scaling: float):
     clipped_circumcenter = circumcenter
     normalized = (clipped_circumcenter - center) / scene_scaling
     cv, cr = contract_mean_std(normalized, radius / scene_scaling)
-    # sphere_area = 4/3*math.pi*cr**3
-    # scaling = safe_div(base_resolution * per_level_scale**n, sphere_area.reshape(-1, 1, 1)).clip(max=1)
     return clipped_circumcenter, cv.float(), cr, normalized
 
 @torch.jit.script
@@ -71,6 +68,7 @@ def activate_output(camera_center, output, indices, circumcenters, vertices, cur
     density = safe_exp(output[:, 0:1]+density_offset)
     field_samples = output[:, 1:12+1]
     sh_coeffs = output[:, 13:]
+    # subtract 0.5 to remove 0th order spherical harmonic
     tet_color_raw = eval_sh(
         circumcenters,
         torch.zeros((output.shape[0], 3), device=vertices.device),
@@ -120,8 +118,8 @@ class iNGPDW(nn.Module):
         self.network.apply(lambda m: init_linear(m, gain))
         last = self.network[-1]
         with torch.no_grad():
-            last.weight[3:, :].zero_()
-            last.bias[3:].zero_()
+            last.weight[4:, :].zero_()
+            last.bias[4:].zero_()
 
     def forward(self, x, cr):
         x = x.detach()
@@ -132,6 +130,8 @@ class iNGPDW(nn.Module):
         erf_x = safe_div(torch.tensor(1.0, device=x.device), safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
         scaling = torch.erf(erf_x)
         output = output * scaling
+        # sphere_area = 4/3*math.pi*cr**3
+        # scaling = safe_div(base_resolution * per_level_scale**n, sphere_area.reshape(-1, 1, 1)).clip(max=1)
         output = self.network(output.reshape(-1, self.L * self.dim))
         return output
 
@@ -220,7 +220,7 @@ class Model(nn.Module):
         dist = torch.clamp_min(distCUDA2(vertices.cuda()), 0.0000001).sqrt().cpu()
 
         vertices = vertices.reshape(-1, 1, 3).expand(-1, init_repeat, 3)
-        vertices = vertices + 1e-1*torch.randn(*vertices.shape) # * dist.reshape(-1, 1, 1)
+        vertices = vertices + torch.randn(*vertices.shape) * dist.reshape(-1, 1, 1).clip(min=0.01)
         vertices = vertices.reshape(-1, 3)
 
         # Convert BasicPointCloud to Open3D PointCloud
@@ -305,7 +305,12 @@ class Model(nn.Module):
 
     @torch.no_grad
     def perturb_vertices(self, perturbation):
-        self.contracted_vertices.data += perturbation[:self.contracted_vertices.shape[0]]
+        if self.contract_vertices:
+            norm_verts = (self.vertices - self.center) / self.scene_scaling 
+            J_d = contraction_jacobian_d_in_chunks(norm_verts).float().reshape(-1, 1)
+        else:
+            J_d = 1
+        self.contracted_vertices.data += (J_d * perturbation)[:self.contracted_vertices.shape[0]]
 
     def calc_vert_alpha(self):
         tet_alphas = self.calc_tet_alpha()
@@ -427,15 +432,12 @@ class Model(nn.Module):
             "y": xyz[:, 1],
             "z": xyz[:, 2],
         }
-        # vertex_lights = self.vertex_lights.detach().cpu().numpy().astype(np.float32).reshape(-1, (self.max_sh_deg+1)**2 - 1, 3)
-        # for i in range(vertex_lights.shape[1]):
-        #     vertex_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(vertex_lights[:, i, 0])
-        #     vertex_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(vertex_lights[:, i, 1])
-        #     vertex_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(vertex_lights[:, i, 2])
 
         N = self.indices.shape[0]
         densities = np.zeros((N), dtype=np.float32)
         lights = np.zeros((N, 4, 3), dtype=np.float32)
+        sh_dim = ((self.max_sh_deg+1)**2-1)
+        sh_coeffs = np.zeros((N, sh_dim, 3), dtype=np.float32)
 
         vertices = self.vertices
         indices = self.indices
@@ -449,6 +451,8 @@ class Model(nn.Module):
                 vertices[indices[start:end]].detach(), field_samples.float(), circumcenters.float().detach())
             vcolors = vcolors.cpu().numpy().astype(np.float32)
             density = density.cpu().numpy().astype(np.float32)
+            sh_coeff = output[:, 13:].reshape(-1, sh_dim, 3)
+            sh_coeffs[start:end] = sh_coeff.cpu().numpy()
             lights[start:end] = vcolors
             densities[start:end] = density.reshape(-1)
 
@@ -458,6 +462,12 @@ class Model(nn.Module):
         for i, co in enumerate(["x", "y", "z", "w"]):
             for j, c in enumerate(["r", "g", "b"]):
                 tetra_dict[f"{c}_{co}"]         = np.ascontiguousarray(lights[:, i, j])
+
+        for i in range(sh_coeffs.shape[1]):
+            tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
+            tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
+            tetra_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(sh_coeffs[:, i, 2])
+
 
         data_dict = {
             "vertex": vertex_dict,
@@ -625,8 +635,8 @@ class TetOptimizer:
     def update_ema(self):
         self.ema.update()
 
-    def add_points(self, new_verts: torch.Tensor):
-        if self.model.contract_vertices:
+    def add_points(self, new_verts: torch.Tensor, raw_verts=False):
+        if self.model.contract_vertices and not raw_verts:
             new_verts = self.model.contract(new_verts)
         self.model.contracted_vertices = self.vertex_optim.cat_tensors_to_optimizer(dict(
             contracted_vertices = new_verts
@@ -644,7 +654,7 @@ class TetOptimizer:
         clone_vertices = self.model.vertices[clone_indices]
 
         if split_mode == "circumcenter":
-            circumcenters, radius = topo_utils.calculate_circumcenters_torch(clone_vertices)
+            circumcenters, radius = calculate_circumcenters_torch(clone_vertices)
             radius = radius.reshape(-1, 1)
             circumcenters = circumcenters.reshape(-1, 3)
             sphere_loc = sample_uniform_in_sphere(circumcenters.shape[0], 3).to(device)
