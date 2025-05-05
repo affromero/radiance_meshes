@@ -204,24 +204,21 @@ class iNGPDW(nn.Module):
         ➋ cr is the same radius that went into contract_mean_std
         """
 
+        ic(self.k_samples)
         if self.k_samples > 1:
-            # ------- convert back to contracted space centred at 0 -----------
-            cv = 4.0 * x - 2.0                        # (B,3)  in [-1,1]
 
             # ------- draw Gaussian jitters inside the sphere -----------------
-            eps = torch.randn((cv.shape[0], self.k_samples, 3),
-                              device=cv.device)
-            eps = eps * (self.trunc_sigma * cr).view(-1,1,1)   # scale
-            samples_cv = (cv.unsqueeze(1) + eps)               # (B,k,3)
-            samples_cv.clamp_(-1.0, 1.0)
+            eps = torch.randn((x.shape[0], self.k_samples, 3),
+                              device=x.device)
+            eps = eps * (self.trunc_sigma * cr/4).view(-1,1,1)   # scale
+            samples_xf = (x.unsqueeze(1) + eps).reshape(-1, 3)
 
-            # ------- map back to [0,1]^3 -------------------------------------
-            samples_x = samples_cv / 4.0 + 0.5                  # (B,k,3)
-            samples_xf = samples_x.view(-1, 3)                  # (B*k,3)
-            samples_cr = cr.repeat_interleave(self.k_samples)   # (B*k,)
+            samples_xf.clamp_(0.0, 1.0)
+            samples_cr = cr.repeat_interleave(self.k_samples)
 
             # ------- encode every jitter and mean in feature space -----------
             h = self._encode(samples_xf, samples_cr)            # (B*k,F)
+            ic(h.shape)
             h = h.view(cv.shape[0], self.k_samples, -1).mean(dim=1)
         else:
             h = self._encode(x, cr)
@@ -303,24 +300,22 @@ class iNGPDW2(nn.Module):
 
 
     def forward(self, x, cr):
-        if self.k_samples == 1:
-            output = self._encode(x, cr)
-        else:
-            cv = 4.0 * x - 2.0                        # (B,3)  in [-1,1]
+        if self.k_samples > 1:
 
             # ------- draw Gaussian jitters inside the sphere -----------------
-            eps = torch.randn((cv.shape[0], self.k_samples, 3),
-                              device=cv.device)
-            eps = eps * (self.trunc_sigma * cr).view(-1,1,1)   # scale
-            samples_cv = (cv.unsqueeze(1) + eps)               # (B,k,3)
-            samples_cv.clamp_(-1.0, 1.0)
+            eps = torch.randn((x.shape[0], self.k_samples, 3),
+                              device=x.device)
+            eps = eps * (self.trunc_sigma * cr/4).view(-1,1,1)   # scale
+            samples_xf = (x.unsqueeze(1) + eps).reshape(-1, 3)
 
-            # ------- map back to [0,1]^3 -------------------------------------
-            samples_x = samples_cv / 4.0 + 0.5                  # (B,k,3)
-            samples_xf = samples_x.view(-1, 3)                  # (B*k,3)
-            samples_cr = cr.repeat_interleave(self.k_samples)   # (B*k,)
+            samples_xf.clamp_(0.0, 1.0)
+            samples_cr = cr.repeat_interleave(self.k_samples)
+
+            # ------- encode every jitter and mean in feature space -----------
             output = self._encode(samples_xf, samples_cr)            # (B*k,F)
-            output = output.view(cv.shape[0], self.k_samples, -1).mean(dim=1)
+            output = output.view(x.shape[0], self.k_samples, -1).mean(dim=1)
+        else:
+            output = self._encode(x, cr)
 
         h = output.reshape(-1, self.L * self.dim)
         # output = self.network(h)

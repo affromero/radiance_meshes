@@ -458,6 +458,13 @@ class TetOptimizer:
             {"params": model.backbone.gradient_net.parameters(),  "lr": gradient_lr, "name": "gradient"},
             {"params": model.backbone.sh_net.parameters(),        "lr": sh_lr,       "name": "sh"},
         ], ignore_param_list=[], betas=[0.9, 0.99])
+        self.ratios = dict(
+            network = 1,
+            density = density_lr / network_lr,
+            color = color_lr / network_lr,
+            gradient = gradient_lr / network_lr,
+            sh = sh_lr / network_lr,
+        )
         self.vert_lr_multi = 1 if model.contract_vertices else float(model.scene_scaling.cpu())
         self.vertex_optim = optim.CustomAdam([
             {"params": [model.contracted_vertices], "lr": self.vert_lr_multi*vertices_lr, "name": "contracted_vertices"},
@@ -517,8 +524,9 @@ class TetOptimizer:
         self.iteration = iteration
         for param_group in self.net_optim.param_groups:
             # if param_group["name"] == "network":
+            ratio = self.ratios[param_group["name"]]
             lr = self.net_scheduler_args(iteration)
-            param_group['lr'] = lr
+            param_group['lr'] = ratio * lr
         for param_group in self.optim.param_groups:
             if param_group["name"] == "encoding":
                 lr = self.encoder_scheduler_args(iteration)
