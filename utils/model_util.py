@@ -10,6 +10,7 @@ from utils.contraction import contract_points, inv_contract_points
 from sh_slang.eval_sh import eval_sh
 from utils.hashgrid import HashEmbedderOptimized
 from icecream import ic
+import torch.nn.init as init # Common alias for torch.nn.init
 
 def gaussian_in_circumsphere(cc: torch.Tensor,       # (T,3)
                              r:  torch.Tensor,       # (T,1)
@@ -208,12 +209,14 @@ class iNGPDW(nn.Module):
         with torch.no_grad():
             last.weight[4:, :].zero_()
             last.bias[4:].zero_()
-        for network in [self.gradient_net, self.sh_net, self.color_net, self.density_net]:
+        for network, eps in zip(
+            [self.gradient_net, self.sh_net, self.density_net], 
+            [1e-3, 1e-3, 0.1]):
             last = network[-1]
             with torch.no_grad():
-                last.weight.zero_()
+                init.uniform(last.weight.data, a=-eps, b=eps)
+                # last.weight.zero_()
                 last.bias.zero_()
-
     def _encode(self, x: torch.Tensor, cr: torch.Tensor):
         x = x.detach()
         output = self.encoding(x).float()

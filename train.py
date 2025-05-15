@@ -86,7 +86,6 @@ args.light_offset = -3
 args.lights_lr = 5e-3
 args.final_lights_lr = 5e-3
 args.lights_lr_delay = 500
-args.color_lr = 1e-2
 args.final_color_lr = 1e-2
 args.max_sh_deg = 3
 args.sh_interval = 2000
