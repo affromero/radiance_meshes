@@ -475,6 +475,8 @@ for iteration in progress_bar:
                 # -----------------------------------------------------------------------
                 grow_mask = (tc < 2000) & (tc > 20)
                 total_grow_moments[grow_mask] += image_votes[grow_mask, 3:6]
+                tet_moments[grow_mask, :3] += image_votes[grow_mask, 13:16]
+                tet_moments[grow_mask, 3] += image_votes[grow_mask, 3]
                 # s0 = image_votes[:, 3] 
                 # s1 = image_votes[:, 4]
                 # s2 = image_votes[:, 5]
@@ -501,8 +503,8 @@ for iteration in progress_bar:
             grow_std[s0 < 1] = 0
             grow_score = s0 * grow_std
             alphas = compute_alpha(model.indices, model.vertices, model.calc_tet_density()).reshape(-1)
-            grow_score[alphas < 0.1] = 0
-            split_score[alphas < 0.1] = 0
+            grow_score[alphas < args.clone_min_alpha] = 0
+            split_score[alphas < args.clone_min_alpha] = 0
             # grow_score[tet_size < 20] = 0
             # grow_score[tet_size > 8000] = 0
 
@@ -514,11 +516,13 @@ for iteration in progress_bar:
                 target_grow = (1-args.percent_split) * target_addition
                 split_mask = torch.zeros((split_score.shape[0]), device=device, dtype=bool)
                 grow_mask = torch.zeros((split_score.shape[0]), device=device, dtype=bool)
+                grow_mask[torch.topk(grow_score, int(target_grow))[1]] = True
+                grow_mask &= grow_score > 0
+                split_score[grow_mask] = 0
+
                 split_mask[torch.topk(split_score, int(target_split))[1]] = True
                 split_mask &= split_score > 0
                 # grow_score[split_mask] = 0
-                grow_mask[torch.topk(grow_score, int(target_grow))[1]] = True
-                grow_mask &= grow_score > 0
                 clone_mask = split_mask | grow_mask
 
                 f = clone_mask.float().reshape(-1, 1).expand(-1, 4).clone()
@@ -537,9 +541,10 @@ for iteration in progress_bar:
                 # di = (cmap(di / di.max())*255).clip(min=0, max=255).astype(np.uint8)
                 # imageio.imwrite(args.output_path / f'di{iteration}.png', di)
 
-                # split_point = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[clone_mask]
-                split_point = get_approx_ray_intersections(split_rays)[clone_mask]
-                tet_optim.split(clone_indices, split_point, args.split_mode, args.prune_density_threshold)
+                split_point = torch.zeros((model.indices.shape[0], 3), device=device)
+                split_point[grow_mask] = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[grow_mask]
+                split_point[split_mask] = get_approx_ray_intersections(split_rays)[split_mask]
+                tet_optim.split(clone_indices, split_point[clone_mask], args.split_mode, args.prune_density_threshold)
 
 
                 out = f"#Split: {split_mask.sum()} "

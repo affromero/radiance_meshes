@@ -577,6 +577,10 @@ VarInfo kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     tet_err.InterlockedAdd(uint2(g_idx, 3), T, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 4), T * mismatch, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 5), T * mismatch * mismatch, old_val);
+                    float3 centroid = tetra_ctrl.dist.y * ray.d + ray.o;
+                    tet_err.InterlockedAdd(uint2(g_idx, 13), T * centroid.x, old_val);
+                    tet_err.InterlockedAdd(uint2(g_idx, 14), T * centroid.y, old_val);
+                    tet_err.InterlockedAdd(uint2(g_idx, 15), T * centroid.z, old_val);
 
                     tet_count.InterlockedAdd(g_idx, 1, old_ival);
 
