@@ -198,6 +198,8 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                    TensorView<bool> tet_alive,
                    no_diff Camera cam,
                    no_diff float min_t,
+                   no_diff float ray_jitter_x,
+                   no_diff float ray_jitter_y,
                    no_diff float scene_scaling,
                    uint32_t2 pix_coord,
                    uint32_t tile_idx_start,
@@ -207,7 +209,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                    uint32_t H,
                    uint32_t W)
 {
-    float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
+    float2 center_pix_coord = {pix_coord.x+ray_jitter_x, pix_coord.y+ray_jitter_y};
     float4 curr_pixel_state = float4(0.f, 0.f, 0.f, 1.f);
     DistortionState5 curr_distortion_state = {0.f, 0.f, 0.f, 0.f, 0.f};
     AlphaOut ao = {
@@ -286,8 +288,10 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                      DiffTensorView final_distortion_state,
                      TensorView<int32_t> n_contributors,
                      TensorView<bool> tet_alive,
-                     Camera cam,
+                     no_diff Camera cam,
                      no_diff float min_t,
+                     no_diff float ray_jitter_x,
+                     no_diff float ray_jitter_y,
                      no_diff float scene_scaling,
                      uint32_t2 pix_coord,
                      uint32_t tile_idx_start,
@@ -298,7 +302,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                      uint32_t W,
                      AlphaOut d_ao)
 {
-    float2 center_pix_coord = {pix_coord.x+0.5, pix_coord.y+0.5};
+    float2 center_pix_coord = {pix_coord.x+ray_jitter_x, pix_coord.y+ray_jitter_y};
     // Load the final pixel state.
     bool is_inside = (pix_coord.x < W && pix_coord.y < H);
     uint32_t block_size = tile_height * tile_width;
@@ -411,6 +415,7 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
                  TensorView<float> world_view_transform,
                  TensorView<float> K,
                  TensorView<float> cam_pos,
+                 TensorView<float> ray_jitter,
                  no_diff float min_t,
                  no_diff float scene_scaling,
                  no_diff float fovy,
@@ -430,6 +435,13 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
 
     Camera cam = no_diff load_camera(world_view_transform, K, cam_pos, fovy, fovx, image_height, image_width);
 
+    float rjx = 0;
+    float rjy = 0;
+    if (is_inside) {
+        rjx = no_diff ray_jitter[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), uint32_t(0))];
+        rjy = no_diff ray_jitter[uint3(uint32_t(pix_coord.y), uint32_t(pix_coord.x), uint32_t(1))];
+    }
+
     AlphaOut pixel_states = alpha_blend(
         sorted_gauss_idx,
         indices,
@@ -441,6 +453,8 @@ void splat_tiled(TensorView<int32_t> sorted_gauss_idx,
         tet_alive,
         cam,
         min_t, 
+        rjx,
+        rjy,
         scene_scaling,
         pix_coord,
         tile_idx_start,

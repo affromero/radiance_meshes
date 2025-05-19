@@ -58,12 +58,12 @@ def pre_calc_cell_values(vertices, indices, center, scene_scaling: float):
     cv, cr = contract_mean_std(normalized, radius / scene_scaling)
     return clipped_circumcenter, cv.float(), cr, normalized
 
-@torch.jit.script
+# @torch.jit.script
 def compute_gradient_from_vertex_colors(
     vcolors:        torch.Tensor,   # (T, 4, 3) - (T, V, C)
     element_verts:  torch.Tensor,   # (T, 4, 3) - (T, V, D)
     circumcenters:  torch.Tensor    # (T, 3)    - (T, D)
-) -> tuple[torch.Tensor, torch.Tensor]: # Returns base (T,C) and gradients (T,C,D)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: # Returns base (T,C) and gradients (T,C,D)
     """
     Recovers the base color and gradients from vertex colors and geometry.
     Assumes V=4 vertices, D=3 dimensions, C=3 color channels.
@@ -132,14 +132,19 @@ def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters
 
     vcolors = compute_vertex_colors_from_field(
         tets.detach(), base_color.reshape(-1, 3), grd.float(), circumcenters.float().detach())
-    vcolors = vcolors.reshape(-1, 12)
-    features = torch.cat([density, vcolors], dim=1)
-    return features
-
-    # base_hat, grd_hat = compute_gradient_from_vertex_colors(
-    #     vcolors, tets, circumcenters.float().detach())
-    # features = torch.cat([density, base_hat.reshape(-1, 3), grd_hat.reshape(-1, 9)], dim=1)
+    # vcolors = vcolors.reshape(-1, 12)
+    # features = torch.cat([density, vcolors], dim=1)
     # return features
+    base_color_v0 = vcolors[:, 0]
+    radius = torch.linalg.norm(tets - circumcenters[:, None, :], dim=-1, keepdim=True)[:, :1]
+    normed_grd = safe_div(grd, radius)
+    features = torch.cat([density, base_color_v0.reshape(-1, 3), normed_grd.reshape(-1, 9)], dim=1)
+    return features.float()
+
+    base_hat, grd_orig, grd_hat = compute_gradient_from_vertex_colors(
+        vcolors, tets, circumcenters.float().detach())
+    features = torch.cat([density, base_hat.reshape(-1, 3), grd_hat.reshape(-1, 9)], dim=1)
+    return features
 
 # def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters, vertices, current_sh_deg, max_sh_deg, density_offset:float):
 #     # subtract 0.5 to remove 0th order spherical harmonic
@@ -212,7 +217,7 @@ class iNGPDW(nn.Module):
             last.bias[4:].zero_()
             for network, eps in zip(
                 [self.gradient_net, self.sh_net, self.density_net], 
-                [5e-2, 1e-4, 0.1]):
+                [5e-1, 1e-4, 0.1]):
                 last = network[-1]
                 with torch.no_grad():
                     init.uniform(last.weight.data, a=-eps, b=eps)

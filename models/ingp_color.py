@@ -378,7 +378,7 @@ class Model(nn.Module):
         self.current_sh_deg = min(self.max_sh_deg, self.current_sh_deg+1)
 
     @torch.no_grad()
-    def update_triangulation(self, high_precision=False, density_threshold=0):
+    def update_triangulation(self, high_precision=False):
         torch.cuda.empty_cache()
         verts = self.vertices
         if high_precision:
@@ -393,13 +393,6 @@ class Model(nn.Module):
         
         self.indices = torch.as_tensor(indices_np).cuda()
         
-        if density_threshold > 0:
-            mask = self.calc_tet_density() > density_threshold
-            self.indices = self.indices[mask]
-            
-            del prev, mask
-        else:
-            del prev
         torch.cuda.empty_cache()
 
     def __len__(self):

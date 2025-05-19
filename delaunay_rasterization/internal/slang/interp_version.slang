@@ -55,13 +55,18 @@ float3 compute_integral(float3 c0, float3 c1, float dt, float d) {
 
 [Differentiable]
 inline float3 mix_color(float4x3 vertex_color, float4 bary) {
-    return vertex_color[0] * bary.x + vertex_color[1] * bary.y + vertex_color[2] * bary.z + vertex_color[3] * bary.w;
+    return max(vertex_color[0] * bary.x + vertex_color[1] * bary.y + vertex_color[2] * bary.z + vertex_color[3] * bary.w, 0.f);
 }
 
 [Differentiable]
 inline float3 linear_color(float4x3 grad, float3 v)
 {
-    return grad[0] + grad[1] * v.x + grad[2] * v.y + grad[3] * v.z;
+    // return grad[0] + grad[1] * v.x + grad[2] * v.y + grad[3] * v.z;
+    return {
+        max(grad[0].r + dot(grad[1], v), 0.f),
+        max(grad[0].g + dot(grad[2], v), 0.f),
+        max(grad[0].b + dot(grad[3], v), 0.f),
+    };
 }
 
 
@@ -89,6 +94,7 @@ bool evaluate_tetra_interp(
         ctrl_pt = { (float4)(0.f, 0.f, 0.f, 0.f), {0.f, 0.f}, g.density };
         return false;
     } else {
+        /*
         float3x3 T = transpose(float3x3(verts[0] - verts[3], verts[1] - verts[3], verts[2] - verts[3]));
         float3 uvw_enter = SolveLinearSystem(T, enter * ray_d + ray_o - verts[3]);
         float3 uvw_exit = SolveLinearSystem(T, exit * ray_d + ray_o - verts[3]);
@@ -101,13 +107,14 @@ bool evaluate_tetra_interp(
 
         float3 c_enter = mix_color(g.vertex_color, b_enter);
         float3 c_exit = mix_color(g.vertex_color, b_exit);
+        */
 
-        /*
+        //*
         float3 v_enter = enter * ray_d + ray_o - verts[0];
         float3 v_exit = exit * ray_d + ray_o - verts[0];
         float3 c_enter = max(linear_color(g.vertex_color, v_enter), 0.f);
         float3 c_exit = max(linear_color(g.vertex_color, v_exit), 0.f);
-        */
+        //*/
 
         float alpha = safe_clip(1.0f - safe_exp(-g.density * dt), 0.f, 1.f);
         float3 final_color = compute_integral(c_exit, c_enter, dt, g.density);

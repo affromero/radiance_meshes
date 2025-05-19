@@ -121,9 +121,15 @@ def safe_sin(x):
 
 
 def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.1,
-           scene_scaling=1, clip_multi=1e-1,
+           scene_scaling=1, clip_multi=1e-1, ray_jitter=None,
            **kwargs):
     device = model.device
+    if ray_jitter is None:
+        ray_jitter = 0.5*torch.ones((camera.image_height, camera.image_width, 2), device=device)
+    else:
+        assert(ray_jitter.shape[0] == camera.image_height)
+        assert(ray_jitter.shape[1] == camera.image_width)
+        assert(ray_jitter.shape[2] == 2)
     fy = fov2focal(camera.fovy, camera.image_height)
     fx = fov2focal(camera.fovx, camera.image_width)
     K = torch.tensor([
@@ -182,7 +188,8 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         scene_scaling,
         min_t,
         camera.fovy,
-        camera.fovx)
+        camera.fovx,
+        ray_jitter)
     alpha = image_rgb.permute(2,0,1)[3, ...]
     total_density = (distortion_img[:, :, 2]**2).clip(min=1e-6)
     # total_density = ((1-alpha) ** 2).clip(min=1e-6)

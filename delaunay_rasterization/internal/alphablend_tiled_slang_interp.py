@@ -11,7 +11,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
                 sorted_tetra_idx, tile_ranges,
                 indices, vertices, tet_density, render_grid,
                 world_view_transform, K, cam_pos, scene_scaling, min_t,
-                fovy, fovx, device="cuda"):
+                fovy, fovx, ray_jitter, device="cuda") -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         distortion_img = torch.zeros((render_grid.image_height, 
                                   render_grid.image_width, 5), 
                                  device=device)
@@ -48,6 +48,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
             world_view_transform=world_view_transform,
             K=K,
             cam_pos=cam_pos,
+            ray_jitter=ray_jitter,
             scene_scaling=scene_scaling,
             min_t=min_t,
             fovy=fovy,
@@ -68,7 +69,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         ctx.save_for_backward(sorted_tetra_idx, tile_ranges,
                               indices, vertices, tet_density, 
                               output_img, distortion_img, n_contributors,
-                              world_view_transform, K, cam_pos)
+                              world_view_transform, K, cam_pos, ray_jitter)
 
         ctx.render_grid = render_grid
         ctx.fovy = fovy
@@ -83,7 +84,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         (sorted_tetra_idx, tile_ranges, 
          indices, vertices, tet_density,
          output_img, distortion_img, n_contributors,
-         world_view_transform, K, cam_pos) = ctx.saved_tensors
+         world_view_transform, K, cam_pos, ray_jitter) = ctx.saved_tensors
         render_grid = ctx.render_grid
         fovy = ctx.fovy
         fovx = ctx.fovx
@@ -122,6 +123,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
             K=K,
             cam_pos=cam_pos,
             min_t=min_t,
+            ray_jitter=ray_jitter,
             scene_scaling=scene_scaling,
             fovy=fovy,
             fovx=fovx,
@@ -139,4 +141,4 @@ class AlphaBlendTiledRender(torch.autograd.Function):
         # ic("abb", time.time()-st)
         
         return (None, None, None, vertices_grad, tet_density_grad, 
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None)

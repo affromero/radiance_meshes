@@ -128,7 +128,6 @@ args.lambda_dist = 1e-5
 
 # Clone Settings
 args.num_samples = 200
-args.p_norm = 100
 args.clone_lambda_ssim = 0.2
 args.split_std = 0.1
 args.split_mode = "split_point"
@@ -139,17 +138,16 @@ args.densify_start = 3000
 args.densify_end = 15000
 args.densify_interval = 500
 args.budget = 2_000_000
-args.lambda_noise = 0.0
-args.perturb_t = 1-0.005
-args.noise_start = 2000
 args.clone_velocity = 0.1
 args.speed_mul = 100
 args.clone_min_alpha = 1/255
 args.clone_min_density = 1e-3
 args.normalize_err = False
-args.lambda_tetvar = 0.1
 args.percent_split = 0.9
 args.density_t = 1.0
+
+args.lambda_noise = 0.0
+args.perturb_t = 1-0.005
 
 args.lambda_ssim = 0.2
 args.base_min_t = 0.2
@@ -290,8 +288,9 @@ for iteration in progress_bar:
     target = camera.original_image.cuda()
 
     st = time.time()
+    ray_jitter = torch.rand((camera.image_height, camera.image_width, 2), device=device)
     bg = 0
-    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, clip_multi=tet_optim.clip_multi, **args.as_dict())
+    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, clip_multi=tet_optim.clip_multi, ray_jitter=ray_jitter, **args.as_dict())
     # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
     #          profile_memory=True, with_stack=True) as prof:
     #     with record_function("model_inference"):
@@ -370,13 +369,12 @@ for iteration in progress_bar:
         tet_optim.sh_optim.zero_grad()
 
     if do_delaunay:
-        if iteration > args.noise_start:
-            alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
-            v_perturb = compute_v_perturbation(
-                model.indices, model.vertices, cc, render_pkg['density'],
-                mask, render_pkg['cc_sensitivity'],
-                tet_optim.vertex_lr, k=100, t=args.perturb_t)
-            model.perturb_vertices(args.lambda_noise * v_perturb)
+        # alphas = compute_alpha(model.indices, model.vertices, render_pkg['density'], mask)
+        # v_perturb = compute_v_perturbation(
+        #     model.indices, model.vertices, cc, render_pkg['density'],
+        #     mask, render_pkg['cc_sensitivity'],
+        #     tet_optim.vertex_lr, k=100, t=args.perturb_t)
+        # model.perturb_vertices(args.lambda_noise * v_perturb)
         # circumcenters = model.get_circumcenters()
         # cc_locations.append(
         #     model.contract(circumcenters.detach()).cpu().numpy()
@@ -538,7 +536,7 @@ for iteration in progress_bar:
                 split_point = torch.zeros((model.indices.shape[0], 3), device=device)
                 split_point[grow_mask] = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[grow_mask]
                 split_point[split_mask] = get_approx_ray_intersections(split_rays)[split_mask]
-                tet_optim.split(clone_indices, split_point[clone_mask], args.split_mode, args.prune_density_threshold)
+                tet_optim.split(clone_indices, split_point[clone_mask], args.split_mode)
 
 
                 out = f"#Split: {split_mask.sum()} "
