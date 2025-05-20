@@ -439,7 +439,7 @@ for iteration in progress_bar:
                 s2 = image_votes[:, 2]
                 split_mu = safe_math.safe_div(s1, s0)
                 split_std = safe_math.safe_div(s2, s0) - split_mu**2
-                split_std[s0 < 1e-4] = 0
+                split_std[s0 < 1] = 0
                 split_std[split_mask] = 0
 
                 split_votes = s0 * split_std
@@ -483,7 +483,6 @@ for iteration in progress_bar:
                 tet_count += tc > 0
                 tet_size += tc
             torch.cuda.empty_cache()
-            tet_size = tet_size / tet_count.clip(min=1)
 
             split_score = total_split_votes.sum(dim=1)
 
@@ -497,8 +496,6 @@ for iteration in progress_bar:
             alphas = compute_alpha(model.indices, model.vertices, model.calc_tet_density()).reshape(-1)
             grow_score[alphas < args.clone_min_alpha] = 0
             split_score[alphas < args.clone_min_alpha] = 0
-            # grow_score[tet_size < 20] = 0
-            # grow_score[tet_size > 8000] = 0
 
 
             target = target_num((iteration - args.densify_start) // args.densify_interval + 1)
@@ -534,8 +531,11 @@ for iteration in progress_bar:
                 # imageio.imwrite(args.output_path / f'di{iteration}.png', di)
 
                 split_point = torch.zeros((model.indices.shape[0], 3), device=device)
-                split_point[grow_mask] = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[grow_mask]
-                split_point[split_mask] = get_approx_ray_intersections(split_rays)[split_mask]
+                # split_point[grow_mask] = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[grow_mask]
+                # split_point[split_mask] = get_approx_ray_intersections(split_rays)[split_mask]
+                grow_point = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])
+                split_point, bad_intersect = get_approx_ray_intersections(split_rays)
+                split_point[bad_intersect] = grow_point[bad_intersect]
                 tet_optim.split(clone_indices, split_point[clone_mask], args.split_mode)
 
 

@@ -450,10 +450,11 @@ def get_approx_ray_intersections(split_rays_data, epsilon=1e-7):
     t_line = t_line_num / denom_safe # Note: This t_line is for the parameter of d2 (from o2)
 
     # Clamp parameters to [0, 1] to stay within the segments
-    # s_seg = torch.clamp(s_line, 0.0, 1.0)
-    # t_seg = torch.clamp(t_line, 0.0, 1.0)
-    s_seg = s_line.clip(min=0)
-    t_seg = t_line.clip(min=0)
+    bad_intersect = (s_line < 0) | (t_line < 0) | (s_line > 1) | (t_line > 1)
+    s_seg = torch.clamp(s_line, 0.0, 1.0)
+    t_seg = torch.clamp(t_line, 0.0, 1.0)
+    # s_seg = s_line.clip(min=0)
+    # t_seg = t_line.clip(min=0)
 
     # Points of closest approach on the segments
     pc1 = o1 + s_seg.unsqueeze(1) * d1
@@ -461,4 +462,4 @@ def get_approx_ray_intersections(split_rays_data, epsilon=1e-7):
     
     p_int = (pc1 + pc2) / 2.0
                         
-    return p_int
+    return p_int, bad_intersect
