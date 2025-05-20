@@ -378,7 +378,7 @@ class Model(nn.Module):
         self.current_sh_deg = min(self.max_sh_deg, self.current_sh_deg+1)
 
     @torch.no_grad()
-    def update_triangulation(self, high_precision=False):
+    def update_triangulation(self, high_precision=False, density_threshold=0.0):
         torch.cuda.empty_cache()
         verts = self.vertices
         if high_precision:
@@ -392,6 +392,14 @@ class Model(nn.Module):
             indices_np = indices_np[(indices_np < verts.shape[0]).all(axis=1)]
         
         self.indices = torch.as_tensor(indices_np).cuda()
+        if density_threshold > 0:
+            mask = self.calc_tet_density() > density_threshold
+            self.indices = self.indices[mask]
+            
+            del prev, mask
+        else:
+            del prev
+        torch.cuda.empty_cache()
         
         torch.cuda.empty_cache()
 
@@ -409,8 +417,6 @@ class TetOptimizer:
                  vertices_lr: float=4e-4,
                  final_vertices_lr: float=4e-7,
                  vertices_lr_delay_multi: float=0.01,
-                 start_clip_multi: float=1e-4,
-                 end_clip_multi: float=1e-4,
                  weight_decay=1e-10,
                  lambda_color=1e-10,
                  split_std: float = 0.5,
@@ -506,13 +512,6 @@ class TetOptimizer:
             self.vertex_lr, self.vert_lr_multi*final_vertices_lr)
         # self.vertex_scheduler_args = base_vertex_scheduler
         self.iteration = 0
-        self.clip_multi_scheduler_args = get_expon_lr_func(lr_init=start_clip_multi,
-                                                lr_final=end_clip_multi,
-                                                max_steps=max_steps)
-
-    @property
-    def clip_multi(self):
-        return self.clip_multi_scheduler_args(self.iteration)
 
     def lambda_dist(self, iteration):
         return float(self.dist_scheduler(iteration))
@@ -552,7 +551,7 @@ class TetOptimizer:
         self.model.update_triangulation()
 
     @torch.no_grad()
-    def split(self, clone_indices, split_point, split_mode, density_threshold):
+    def split(self, clone_indices, split_point, split_mode):
         device = self.model.device
         clone_vertices = self.model.vertices[clone_indices]
 
@@ -583,10 +582,6 @@ class TetOptimizer:
         else:
             raise Exception(f"Split mode: {split_mode} not supported")
         self.add_points(new_vertex_location)
-        mask = self.model.calc_vert_density() < density_threshold
-        print(f"Pruned: {mask.sum()} points")
-        self.remove_points(~mask)
-        del mask
 
     def main_step(self):
         self.optim.step()

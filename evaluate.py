@@ -20,6 +20,7 @@ args.dataset_path = Path("/optane/nerf_datasets/360/bicycle")
 args.output_path = Path("output/test/")
 args.eval = True
 args.use_ply = False
+args.render_train = False
 args = Args.from_namespace(args.get_parser().parse_args())
 
 device = torch.device('cuda')
@@ -35,6 +36,12 @@ train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device="cuda", eval=args.eval)
 
 ic(model.min_t)
+if args.render_train:
+    splits = zip(['train', 'test'], [train_cameras, test_cameras])
+else:
+    splits = zip(['test'], [test_cameras])
+test_util.evaluate_and_save(model, splits, args.output_path, args.tile_size, min_t=model.min_t)
+#model.save2ply(Path('test.ply'))
 
 with torch.no_grad():
     epath = cam_util.generate_cam_path(train_cameras, 400)
@@ -47,9 +54,3 @@ with torch.no_grad():
         eimages.append(image)
 
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)
-if args.render_train:
-    splits = zip(['train', 'test'], [train_cameras, test_cameras])
-else:
-    splits = zip(['test'], [test_cameras])
-test_util.evaluate_and_save(model, splits, args.output_path, args.tile_size, min_t=model.min_t)
-model.save2ply(Path('test.ply'))

@@ -136,6 +136,7 @@ def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters
     # features = torch.cat([density, vcolors], dim=1)
     # return features
     base_color_v0 = vcolors[:, 0]
+    # base_color_v0 = torch.rand_like(base_color_v0)
     radius = torch.linalg.norm(tets - circumcenters[:, None, :], dim=-1, keepdim=True)[:, :1]
     normed_grd = safe_div(grd, radius)
     features = torch.cat([density, base_color_v0.reshape(-1, 3), normed_grd.reshape(-1, 9)], dim=1)
@@ -145,23 +146,6 @@ def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters
         vcolors, tets, circumcenters.float().detach())
     features = torch.cat([density, base_hat.reshape(-1, 3), grd_hat.reshape(-1, 9)], dim=1)
     return features
-
-# def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters, vertices, current_sh_deg, max_sh_deg, density_offset:float):
-#     # subtract 0.5 to remove 0th order spherical harmonic
-#     tets = vertices[indices]
-#     tet_color_raw = eval_sh(
-#         tets.mean(dim=1),
-#         torch.zeros((rgb.shape[0], 3), device=vertices.device),
-#         sh.reshape(-1, (max_sh_deg+1)**2 - 1, 3),
-#         camera_center,
-#         current_sh_deg) - 0.5
-#     vcolors = compute_vertex_colors_from_field(
-#         tets.detach(), rgb.float(), grd.float(), circumcenters.float().detach())
-#     # vcolors = torch.nn.functional.softplus(tet_color_raw.reshape(-1, 1, 3).expand(-1, 4, 3), beta=10)
-#     vcolors = torch.nn.functional.softplus(vcolors + tet_color_raw.reshape(-1, 1, 3), beta=10)
-#     vcolors = vcolors.reshape(-1, 12)
-#     features = torch.cat([density, vcolors], dim=1)
-#     return features
 
 class iNGPDW(nn.Module):
     def __init__(self, 
@@ -208,7 +192,7 @@ class iNGPDW(nn.Module):
 
         self.density_net   = mk_head(1)
         self.color_net     = mk_head(3)
-        self.gradient_net  = mk_head(9)
+        self.gradient_net  = mk_head(3)
         self.sh_net        = mk_head(sh_dim)
 
         last = self.network[-1]
@@ -217,7 +201,7 @@ class iNGPDW(nn.Module):
             last.bias[4:].zero_()
             for network, eps in zip(
                 [self.gradient_net, self.sh_net, self.density_net], 
-                [5e-1, 1e-4, 0.1]):
+                [1e-0, 1e-4, 0.1]):
                 last = network[-1]
                 with torch.no_grad():
                     init.uniform(last.weight.data, a=-eps, b=eps)
@@ -265,13 +249,14 @@ class iNGPDW(nn.Module):
         # field_samples = temp[:, 3:12]
         # sh = output[:, 13:]
 
-        sigma   = self.density_net(h)
+        sigma = self.density_net(h)
         rgb = self.color_net(h)
         field_samples = self.gradient_net(h)
         sh  = self.sh_net(h)
 
-        rgb = rgb.reshape(-1, 1, 3) + 0.5
+        rgb = rgb.reshape(-1, 3, 1) + 0.5
         density = safe_exp(sigma+self.density_offset)
-        grd =  torch.tanh(field_samples.reshape(-1, 3, 3)) / math.sqrt(3)
+        grd = torch.tanh(field_samples.reshape(-1, 1, 3).expand(-1, 3, 3)) / math.sqrt(3)
+        # grd = torch.tanh(field_samples.reshape(-1, 3, 3)) / math.sqrt(3)
         # grd = rgb * torch.tanh(field_samples.reshape(-1, 3, 3))  # shape (T, 3, 3)
         return density, rgb.reshape(-1, 3), grd, sh

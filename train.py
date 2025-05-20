@@ -290,7 +290,7 @@ for iteration in progress_bar:
     st = time.time()
     ray_jitter = torch.rand((camera.image_height, camera.image_width, 2), device=device)
     bg = 0
-    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, clip_multi=tet_optim.clip_multi, ray_jitter=ray_jitter, **args.as_dict())
+    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, ray_jitter=ray_jitter, **args.as_dict())
     # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
     #          profile_memory=True, with_stack=True) as prof:
     #     with record_function("model_inference"):
