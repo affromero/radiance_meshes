@@ -287,11 +287,11 @@ for iteration in progress_bar:
     if do_delaunay or do_freeze:
         st = time.time()
         tet_optim.update_triangulation(density_threshold=args.density_threshold, high_precision=do_freeze)
-        # if do_freeze:
-        #     del tet_optim
-        #     model, tet_optim = freeze_model(model, **args.as_dict())
-        #     gc.collect()
-        #     torch.cuda.empty_cache()
+        if do_freeze:
+            del tet_optim
+            model, tet_optim = freeze_model(model, **args.as_dict())
+            gc.collect()
+            torch.cuda.empty_cache()
 
     if len(inds) == 0:
         inds = list(range(len(train_cameras)))

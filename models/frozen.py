@@ -3,6 +3,7 @@ from torch import nn
 from typing import Optional, Tuple
 import gc
 import tinyplypy
+import numpy as np
 
 from data.camera import Camera
 from utils.topo_utils import (
@@ -129,7 +130,6 @@ class FrozenTetModel(nn.Module):
                 density, rgb, grd, sh, indices[start:end],
                 cc, vertices,
                 self.current_sh_deg, self.max_sh_deg,
-                self.density_offset,
             )
             normed_cc_list.append(normalized)
             out_list.append(cell_output)
