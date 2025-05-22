@@ -97,8 +97,7 @@ class Model(nn.Module):
             dvrgbs = activate_output(camera.camera_center.to(self.device),
                                      density, rgb, grd, sh, indices[start:end],
                                      circumcenters,
-                                     vertices, self.current_sh_deg, self.max_sh_deg,
-                                     self.density_offset)
+                                     vertices, self.current_sh_deg, self.max_sh_deg)
             normed_cc.append(normalized)
             outputs.append(dvrgbs)
         features = torch.cat(outputs, dim=0)
@@ -322,7 +321,7 @@ class Model(nn.Module):
 
         N = self.indices.shape[0]
         densities = np.zeros((N), dtype=np.float32)
-        lights = np.zeros((N, 4, 3), dtype=np.float32)
+        grds = np.zeros((N, 3), dtype=np.float32)
         sh_dim = ((self.max_sh_deg+1)**2-1)
         sh_coeffs = np.zeros((N, sh_dim, 3), dtype=np.float32)
 
@@ -332,21 +331,21 @@ class Model(nn.Module):
             end = min(start + self.chunk_size, indices.shape[0])
 
             circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
-            vcolors = compute_vertex_colors_from_field(
-                vertices[indices[start:end]].detach(), rgb.float(), grd.float(), circumcenters.float().detach())
-            vcolors = vcolors.cpu().numpy().astype(np.float32)
+            tets = vertices[indices[start:end]]
+            base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
+            base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
+            normed_grd = normed_grd.cpu().numpy().astype(np.float32)
             density = density.cpu().numpy().astype(np.float32)
             sh_coeff = sh.reshape(-1, sh_dim, 3)
             sh_coeffs[start:end] = sh_coeff.cpu().numpy()
-            lights[start:end] = vcolors
+            grds[start:end] = normed_grd
             densities[start:end] = density.reshape(-1)
 
         tetra_dict = {}
         tetra_dict["vertex_indices"] = self.indices.cpu().numpy().astype(np.int32)
         tetra_dict["s"] = np.ascontiguousarray(densities)
-        for i, co in enumerate(["x", "y", "z", "w"]):
-            for j, c in enumerate(["r", "g", "b"]):
-                tetra_dict[f"{c}_{co}"]         = np.ascontiguousarray(lights[:, i, j])
+        for i, co in enumerate(["x", "y", "z"]):
+            tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
 
         for i in range(sh_coeffs.shape[1]):
             tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
@@ -383,7 +382,7 @@ class Model(nn.Module):
         torch.cuda.empty_cache()
         verts = self.vertices
         if high_precision:
-            indices_np = Delaunay(verts.detach().cpu().numpy()).simplices.astype(int)
+            indices_np = Delaunay(verts.detach().cpu().numpy()).simplices.astype(np.int32)
             # self.indices = torch.tensor(indices_np, device=verts.device).int().cuda()
         else:
             v = Del(verts.shape[0])

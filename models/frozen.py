@@ -2,19 +2,15 @@ import torch
 from torch import nn
 from typing import Optional, Tuple
 import gc
+import tinyplypy
 
-# --- project utilities ------------------------------------------------------
 from data.camera import Camera
 from utils.topo_utils import (
-    build_tv_struct,             # for TV regulariser
+    build_tv_struct,
 )
 from utils.model_util import activate_output
-from utils import optim          # project's CustomAdam wrapper
+from utils import optim
 from utils.model_util import *
-
-# =============================================================================
-# 1.  FROZEN TET MODEL (no neural network)                                    |
-# =============================================================================
 
 class FrozenTetModel(nn.Module):
     """Minimal field representation with *fixed* tetrahedral geometry.
@@ -148,6 +144,58 @@ class FrozenTetModel(nn.Module):
     def __len__(self):
         return self.vertices.shape[0]
 
+    @torch.no_grad
+    def save2ply(self, path):
+        path.parent.mkdir(exist_ok=True, parents=True)
+
+        xyz = self.vertices.detach().cpu().numpy().astype(np.float32)  # shape (num_vertices, 3)
+
+        vertex_dict = {
+            "x": xyz[:, 0],
+            "y": xyz[:, 1],
+            "z": xyz[:, 2],
+        }
+
+        N = self.indices.shape[0]
+        densities = np.zeros((N), dtype=np.float32)
+        grds = np.zeros((N, 3), dtype=np.float32)
+        sh_dim = ((self.max_sh_deg+1)**2-1)
+        sh_coeffs = np.zeros((N, sh_dim, 3), dtype=np.float32)
+
+        vertices = self.vertices
+        indices = self.indices
+        for start in range(0, indices.shape[0], self.chunk_size):
+            end = min(start + self.chunk_size, indices.shape[0])
+
+            circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
+            tets = vertices[indices[start:end]]
+            base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
+            base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
+            normed_grd = normed_grd.cpu().numpy().astype(np.float32)
+            density = density.cpu().numpy().astype(np.float32)
+            sh_coeff = sh.reshape(-1, sh_dim, 3)
+            sh_coeffs[start:end] = sh_coeff.cpu().numpy()
+            grds[start:end] = normed_grd
+            densities[start:end] = density.reshape(-1)
+
+        tetra_dict = {}
+        tetra_dict["vertex_indices"] = self.indices.cpu().numpy().astype(np.int32)
+        tetra_dict["s"] = np.ascontiguousarray(densities)
+        for i, co in enumerate(["x", "y", "z"]):
+            tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
+
+        for i in range(sh_coeffs.shape[1]):
+            tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
+            tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
+            tetra_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(sh_coeffs[:, i, 2])
+
+
+        data_dict = {
+            "vertex": vertex_dict,
+            "tetrahedron": tetra_dict,
+        }
+
+        tinyplypy.write_ply(str(path), data_dict, is_binary=True)
 
     @property
     def num_int_verts(self):

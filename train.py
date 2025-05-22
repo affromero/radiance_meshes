@@ -123,8 +123,7 @@ args.final_vertices_lr = 5e-8
 args.vertices_lr_delay_multi = 1e-8
 args.vertices_beta = [0.9, 0.99]
 args.contract_vertices = False
-args.start_clip_multi = 1e-3
-args.end_clip_multi = 1e-3
+args.clip_multi = 1e-1
 args.delaunay_start = 17000
 args.freeze_start = 17000
 args.ext_convex_hull = False
@@ -149,7 +148,7 @@ args.speed_mul = 100
 args.clone_min_alpha = 0.05
 args.clone_min_density = 1e-3
 args.normalize_err = False
-args.percent_split = 1
+args.percent_split = 1.0
 args.density_t = 1.0
 
 args.lambda_noise = 0.0
@@ -546,11 +545,10 @@ for iteration in progress_bar:
                 # imageio.imwrite(args.output_path / f'di{iteration}.png', di)
 
                 split_point = torch.zeros((model.indices.shape[0], 3), device=device)
-                # split_point[grow_mask] = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])[grow_mask]
-                # split_point[split_mask] = get_approx_ray_intersections(split_rays)[split_mask]
                 grow_point = safe_math.safe_div(tet_moments[:, :3], tet_moments[:, 3:4])
                 split_point, bad_intersect = get_approx_ray_intersections(split_rays)
                 split_point[bad_intersect] = grow_point[bad_intersect]
+                split_point[grow_mask] = grow_point[grow_mask]
                 tet_optim.split(clone_indices, split_point[clone_mask], args.split_mode)
 
 
@@ -599,7 +597,9 @@ torch.cuda.synchronize()
 torch.cuda.empty_cache()
 
 model.save2ply(args.output_path / "ckpt.ply")
-torch.save(model.state_dict(), args.output_path / "ckpt.pth")
+sd = model.state_dict()
+sd['indices'] = model.indices
+torch.save(sd, args.output_path / "ckpt.pth")
 
 if args.render_train:
     splits = zip(['train', 'test'], [train_cameras, test_cameras])

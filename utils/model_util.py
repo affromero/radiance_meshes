@@ -117,26 +117,26 @@ def compute_vertex_colors_from_field(
     
     return vertex_colors
 
-def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters, vertices, current_sh_deg, max_sh_deg, density_offset:float):
-    # subtract 0.5 to remove 0th order spherical harmonic
+def offset_normalize(rgb, grd, circumcenters, tets):
+    grd = grd.reshape(-1, 1, 3) * rgb.reshape(-1, 3, 1).mean(dim=1, keepdim=True).detach()
+    radius = torch.linalg.norm(tets - circumcenters[:, None, :], dim=-1, keepdim=True)[:, :1]
+    normed_grd = safe_div(grd, radius)
+    vcolors = compute_vertex_colors_from_field(
+        tets.detach(), rgb.reshape(-1, 3), normed_grd.float(), circumcenters.float().detach())
+
+    base_color_v0_raw = vcolors[:, 0]
+    return base_color_v0_raw, normed_grd
+
+def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters, vertices, current_sh_deg, max_sh_deg):
     tets = vertices[indices]
+    base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
     tet_color_raw = eval_sh(
         tets.mean(dim=1),
-        rgb.float(),
+        base_color_v0_raw,
         sh.reshape(-1, (max_sh_deg+1)**2 - 1, 3),
         camera_center,
         current_sh_deg) - 0.5
-    base_color = torch.nn.functional.softplus(tet_color_raw.reshape(-1, 3, 1), beta=10)
-    # grd = grd.reshape(-1, 1, 3) * base_color.min(dim=1, keepdim=True).values.detach()
-    grd = grd.reshape(-1, 1, 3) * base_color.mean(dim=1, keepdim=True).detach()
-    radius = torch.linalg.norm(tets - circumcenters[:, None, :], dim=-1, keepdim=True)[:, :1]
-    normed_grd = safe_div(grd, radius)
-
-    vcolors = compute_vertex_colors_from_field(
-        tets.detach(), base_color.reshape(-1, 3), normed_grd.float(), circumcenters.float().detach())
-
-    base_color_v0 = vcolors[:, 0]
-    # base_color_v0 = torch.rand_like(base_color_v0)
+    base_color_v0 = torch.nn.functional.softplus(tet_color_raw.reshape(-1, 3, 1), beta=10)
     features = torch.cat([density, base_color_v0.reshape(-1, 3), normed_grd.reshape(-1, 3)], dim=1)
     return features.float()
 

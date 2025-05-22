@@ -81,7 +81,7 @@ def eval_sh(
         sh0,
         features,
         rayo,
-        sh_degree):
+        sh_degree) -> torch.Tensor:
     out = EvalSH.apply(
         means,
         sh0,
