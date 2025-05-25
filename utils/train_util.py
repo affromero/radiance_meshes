@@ -330,8 +330,8 @@ class SpikingLR:
         self.peak_lr_final = peak_lr_final
 
     def peak_height_fn(self, i):
-        # return i / self.max_steps * (self.peak_lr_final - self.peak_lr_init) + self.peak_lr_init
-        return self.peak_lr_init
+        return i / self.max_steps * (self.peak_lr_final - self.peak_lr_init) + self.peak_lr_init
+        # return self.peak_lr_init
     
     def peak_fn(self, i, height):
         return height * math.exp(-i * 6/self.duration + 2/self.duration) / math.exp(2/self.duration)

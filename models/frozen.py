@@ -93,12 +93,12 @@ class FrozenTetModel(nn.Module):
         circumcenters: Optional[torch.Tensor] = None,
     ):
         if circumcenters is None:
-            circumcenter, cv, cr, normalized = pre_calc_cell_values(
-                vertices, indices[start:end], self.center, self.scene_scaling
+            circumcenter = pre_calc_cell_values(
+                vertices, indices[start:end]
             )
         else:
             circumcenter = circumcenters[start:end]
-            normalized = (circumcenter - self.center) / self.scene_scaling
+        normalized = (circumcenter - self.center) / self.scene_scaling
 
         density  = self.density[start:end]
         rgb      = self.rgb[start:end]
@@ -203,7 +203,7 @@ class FrozenTetModel(nn.Module):
         return self.contracted_vertices.shape[0]
 
     def get_circumcenters(self):
-        circumcenter, cv, cr, normalized =  pre_calc_cell_values(
+        circumcenter =  pre_calc_cell_values(
             self.vertices, self.indices, self.center, self.scene_scaling)
         return cv
 
