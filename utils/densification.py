@@ -56,7 +56,7 @@ def collect_render_stats(
         density = extras["cell_values"][:, 0]          # kept for completeness
 
         # -------- Split -------------------------------------------------------
-        split_mask = (tc > 2000) | (tc < 4)
+        split_mask = (tc > 2000) | (tc < args.min_tet_count)
 
         s0, s1, s2  = image_votes[:, 0], image_votes[:, 1], image_votes[:, 2]
         split_mu    = safe_math.safe_div(s1, s0)
@@ -84,7 +84,7 @@ def collect_render_stats(
         )
 
         # -------- Grow --------------------------------------------------------
-        grow_mask = (tc < 2000) & (tc > 4)
+        grow_mask = (tc < 2000) & (tc > args.min_tet_count)
         total_grow_moments[grow_mask] += image_votes[grow_mask, 3:6]
 
         tet_moments[grow_mask, :3] += image_votes[grow_mask, 13:16]

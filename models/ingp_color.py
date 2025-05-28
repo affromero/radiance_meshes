@@ -183,7 +183,7 @@ class Model(nn.Module):
         # tet_data = data_dict["tetrahedron"]
         # indices = tet_data["vertex_indices"]  # shape (N,4)
         ckpt_path = path / "ckpt.pth"
-        config_path = path / "alldata.json"
+        config_path = path / "config.json"
         config = Args.load_from_json(str(config_path))
         ckpt = torch.load(ckpt_path)
         vertices = ckpt['contracted_vertices']

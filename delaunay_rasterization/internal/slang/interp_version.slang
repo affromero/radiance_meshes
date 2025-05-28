@@ -75,7 +75,7 @@ inline float3 mix_color(float4x3 vertex_color, float4 bary) {
 inline float3 linear_color(float3 grad, float3 v)
 {
     // return grad[0] + grad[1] * v.x + grad[2] * v.y + grad[3] * v.z;
-    float f = max(dot(grad, v), 0.f);
+    float f = dot(grad, v);
     return {f, f, f};
 }
 

@@ -4,10 +4,11 @@ from typing import Optional, Tuple
 import gc
 import tinyplypy
 import numpy as np
+from pathlib import Path
 
 from data.camera import Camera
 from utils.topo_utils import (
-    build_tv_struct,
+    build_tv_struct, max_density_contrast
 )
 from utils.model_util import activate_output
 from utils import optim
@@ -15,6 +16,7 @@ from utils.model_util import *
 from utils.safe_math import safe_log, safe_exp
 from utils.train_util import get_expon_lr_func, SpikingLR
 from utils import mesh_util
+from utils.args import Args
 
 
 class FrozenTetModel(nn.Module):
@@ -57,14 +59,15 @@ class FrozenTetModel(nn.Module):
         self.register_buffer("scene_scaling", torch.as_tensor(scene_scaling))
 
         # learnable per‑tet parameters -------------------------------------------
-        self.density   = nn.Parameter(safe_log(density))    # (T, 1)
+        # self.density   = nn.Parameter(safe_log(density))    # (T, 1)
+        # self.gradient  = nn.Parameter(torch.atanh(gradient.clip(min=-0.99, max=0.99)))   # (T, 3, 3)
+        self.density   = nn.Parameter(density)    # (T, 1)
+        self.gradient  = nn.Parameter(gradient)   # (T, 3, 3)
         self.rgb       = nn.Parameter(rgb)        # (T, 3)
-        self.gradient  = nn.Parameter(torch.atanh(gradient.clip(min=-0.99, max=0.99)))   # (T, 3, 3)
         self.sh        = nn.Parameter(sh)         # (T, SH, 3)
 
         # misc --------------------------------------------------------------------
         self.density_offset  = density_offset
-        self.current_sh_deg  = current_sh_deg
         self.max_sh_deg      = max_sh_deg
         self.chunk_size      = chunk_size
         self.device          = self.density.device
@@ -73,6 +76,62 @@ class FrozenTetModel(nn.Module):
         self.contract_vertices = False
         self.mask_values = False
         self.frozen = True
+
+    @staticmethod
+    def load_ckpt(path: Path, device):
+        """Load a checkpoint from a directory containing ckpt.pth and alldata.json.
+
+        Parameters
+        ----------
+        path : Path
+            Directory containing the checkpoint files
+        device : torch.device
+            Device to load the model onto
+
+        Returns
+        -------
+        FrozenTetModel
+            The loaded model
+        """
+        ckpt_path = path / "ckpt.pth"
+        config_path = path / "config.json"
+        config = Args.load_from_json(str(config_path))
+        ckpt = torch.load(ckpt_path)
+        
+        # Extract required parameters from checkpoint
+        int_vertices = ckpt['contracted_vertices']
+        ext_vertices = ckpt['ext_vertices']
+        indices = ckpt['indices']
+        density = ckpt['density']
+        rgb = ckpt['rgb']
+        gradient = ckpt['gradient']
+        sh = ckpt['sh']
+        center = ckpt['center']
+        scene_scaling = ckpt['scene_scaling']
+        
+        print(f"Loaded {int_vertices.shape[0]} internal vertices")
+        
+        # Create model instance
+        model = FrozenTetModel(
+            int_vertices=int_vertices.to(device),
+            ext_vertices=ext_vertices.to(device),
+            indices=indices.to(device),
+            density=density.to(device),
+            rgb=rgb.to(device),
+            gradient=gradient.to(device),
+            sh=sh.to(device),
+            center=center.to(device),
+            scene_scaling=scene_scaling.to(device),
+            density_offset=config.density_offset,
+            max_sh_deg=config.max_sh_deg,
+            chunk_size=config.chunk_size if hasattr(config, 'chunk_size') else 408_576,
+        )
+        
+        # Load state dict to ensure all parameters are properly loaded
+        model.load_state_dict(ckpt)
+        model.min_t = model.scene_scaling * config.base_min_t
+        
+        return model
 
     # ------------------------------------------------------------------
     # convenience properties
@@ -100,9 +159,11 @@ class FrozenTetModel(nn.Module):
             circumcenter = circumcenters
         normalized = (circumcenter - self.center) / self.scene_scaling
 
-        density  = safe_exp(self.density)
+        density  = self.density
+        grd      = self.gradient
+        # density  = safe_exp(self.density)
+        # grd      = torch.tanh(self.gradient)
         rgb      = self.rgb
-        grd      = torch.tanh(self.gradient)
         sh       = self.sh
 
         return circumcenter, normalized, density, rgb, grd, sh
@@ -126,7 +187,7 @@ class FrozenTetModel(nn.Module):
             camera.camera_center.to(self.device),
             density, rgb, grd, sh, indices,
             cc, vertices,
-            self.current_sh_deg, self.max_sh_deg,
+            self.max_sh_deg, self.max_sh_deg,
         )
         return normalized, cell_output
 
@@ -159,19 +220,16 @@ class FrozenTetModel(nn.Module):
 
         vertices = self.vertices
         indices = self.indices
-        for start in range(0, indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, indices.shape[0])
-
-            circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
-            tets = vertices[indices[start:end]]
-            base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
-            base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
-            normed_grd = normed_grd.cpu().numpy().astype(np.float32)
-            density = density.cpu().numpy().astype(np.float32)
-            sh_coeff = sh.reshape(-1, sh_dim, 3)
-            sh_coeffs[start:end] = sh_coeff.cpu().numpy()
-            grds[start:end] = normed_grd.reshape(-1, 3)
-            densities[start:end] = density.reshape(-1)
+        circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
+        tets = vertices[indices]
+        base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
+        base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
+        normed_grd = normed_grd.cpu().numpy().astype(np.float32)
+        density = density.cpu().numpy().astype(np.float32)
+        sh_coeff = sh.reshape(-1, sh_dim, 3)
+        sh_coeffs = sh_coeff.cpu().numpy()
+        grds = normed_grd.reshape(-1, 3)
+        densities = density.reshape(-1)
 
         tetra_dict = {}
         tetra_dict["vertex_indices"] = self.indices.cpu().numpy().astype(np.int32)
@@ -226,7 +284,7 @@ class FrozenTetModel(nn.Module):
         for start in range(0, self.indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, self.indices.shape[0])
             
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
+            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices)
 
             density = density.reshape(-1)
             indices_chunk = indices[start:end]
@@ -237,31 +295,30 @@ class FrozenTetModel(nn.Module):
             vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 3], src=density, reduce=reduce_type)
         return vertex_density
 
-    def calc_tet_alpha(self):
+    def calc_tet_alpha(self, mode="min"):
         alpha_list = []
         start = 0
         
         verts = self.vertices
-        for start in range(0, self.indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, self.indices.shape[0])
-            
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
-
-            indices_chunk = self.indices[start:end]
-            v0, v1, v2, v3 = verts[indices_chunk[:, 0]], verts[indices_chunk[:, 1]], verts[indices_chunk[:, 2]], verts[indices_chunk[:, 3]]
-            
-            edge_lengths = torch.stack([
-                torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
-                torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
-            ], dim=0).max(dim=0)[0]
-            
-            # Compute the maximum possible alpha using the largest edge length
-            alpha = 1 - torch.exp(-density.reshape(-1) * edge_lengths.reshape(-1))
-            alpha_list.append(alpha)
-            del edge_lengths, density
+        inds = self.indices
+        v0, v1, v2, v3 = verts[inds[:, 0]], verts[inds[:, 1]], verts[inds[:, 2]], verts[inds[:, 3]]
         
-        alphas = torch.cat(alpha_list, dim=0)
-        return alphas
+        edge_lengths = torch.stack([
+            torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
+            torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
+        ], dim=0)
+        if mode == "min":
+            el = edge_lengths.min(dim=0)[0]
+        elif mode == "max":
+            el = edge_lengths.max(dim=0)[0]
+        elif mode == "mean":
+            el = edge_lengths.mean(dim=0)
+        else:
+            raise ValueError(f"Unknown mode: {mode}. Use 'min', 'max', or 'mean'.")
+        
+        # Compute the maximum possible alpha using the largest edge length
+        alpha = 1 - torch.exp(-self.density.reshape(-1) * el.reshape(-1))
+        return alpha
 
     def tet_variability(self):
         vertices = self.vertices
@@ -270,7 +327,7 @@ class FrozenTetModel(nn.Module):
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
 
-            circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
+            circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
             vcolors = compute_vertex_colors_from_field(
                 vertices[indices[start:end]].detach(), rgb.float(), grd.float(),
                 circumcenters.float().detach())
@@ -282,22 +339,38 @@ class FrozenTetModel(nn.Module):
     def calc_tet_density(self):
         densities = []
         verts = self.vertices
-        for start in range(0, self.indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, self.indices.shape[0])
-            
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
-
-            densities.append(density.reshape(-1))
-        return torch.cat(densities)
+        _, _, densities, _, _, _ = self.compute_batch_features(verts, self.indices)
+        return densities.reshape(-1)
 
     @torch.no_grad
-    def extract_mesh(self, path, density_threshold=0.5):
+    def extract_mesh(self, path, density_threshold=0.5, alpha_threshold=0.2):
         path.mkdir(exist_ok=True, parents=True)
-        mask = self.calc_tet_density() > density_threshold
         verts = self.vertices
-        meshes = mesh_util.extract_meshes(verts.detach().cpu().numpy(), self.indices[mask])
+        tet_density = self.calc_tet_density()
+        tet_alpha = self.calc_tet_alpha(mode="min")
+        mask = (tet_density > density_threshold) | (tet_alpha > alpha_threshold)
+        # # mask = tet_density > density_threshold
+        # density_contrast = max_density_contrast(verts, self.indices, tet_density, mode="ratio")
+        # mask = (density_contrast > density_threshold) & (tet_density > 0.5)
+
+
+        rgb = self.rgb[mask].detach()
+        tets = verts[self.indices[mask]]
+        circumcenters, radius = calculate_circumcenters_torch(tets.double())
+        grd = self.gradient[mask].detach()
+        grd = grd.reshape(-1, 1, 3) * rgb.reshape(-1, 3, 1).mean(dim=1, keepdim=True).detach()
+        ic(rgb.shape, grd.shape, radius.shape)
+        normed_grd = safe_div(grd, radius.reshape(-1, 1, 1))
+        vcolors = compute_vertex_colors_from_field(
+            tets.detach(), rgb.reshape(-1, 3), normed_grd.float(), circumcenters.float().detach())
+        vcolors = torch.nn.functional.softplus(vcolors, beta=10)
+
+        meshes = mesh_util.extract_meshes(
+            vcolors.detach().cpu().numpy(),
+            verts.detach().cpu().numpy(),
+            self.indices[mask].cpu().numpy())
         for i, mesh in enumerate(meshes):
-            F = mesh['face']['vertex_indices']
+            F = mesh['face']['vertex_indices'].shape[0]
             if F > 1000:
                 mpath = path / f"{i}.ply"
                 print(f"Saving #F:{F} to {mpath}")
@@ -393,8 +466,8 @@ class FrozenTetOptimizer:
         # ------------------------------------------------------------------
         # single optimiser with four parameter groups
         # ------------------------------------------------------------------
-        # self.optim = torch.optim.RMSprop([
-        self.optim = torch.optim.Adam([
+        self.optim = torch.optim.RMSprop([
+        # self.optim = torch.optim.Adam([
             {"params": [model.density],  "lr": density_lr,  "name": "density"},
             {"params": [model.rgb],      "lr": color_lr,    "name": "color"},
             {"params": [model.gradient], "lr": gradient_lr, "name": "gradient"},

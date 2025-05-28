@@ -10,9 +10,6 @@ sys.path.append(str(Path(os.path.abspath('')).parent))
 print(str(Path(os.path.abspath('')).parent))
 import math
 import torch
-import matplotlib.pyplot as plt
-import mediapy
-from icecream import ic
 from data import loader
 import random
 import time
@@ -26,22 +23,15 @@ from models.frozen import freeze_model
 from fused_ssim import fused_ssim
 from pathlib import Path, PosixPath
 from utils.args import Args
-import pickle
 import json
-from utils import safe_math
-from delaunay_rasterization.internal.render_err import render_err
 import imageio
-from torch.profiler import profile, ProfilerActivity, record_function
 from utils import test_util
-from utils.graphics_utils import tetra_volume
 import termplotlib as tpl
 from utils.lib_bilagrid import BilateralGrid, total_variation_loss, slice
 from torch.optim.lr_scheduler import ExponentialLR, LinearLR, ChainedScheduler
 import gc
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import pyvista as pv
 from utils.densification import collect_render_stats, apply_densification
+import mediapy
 
 
 torch.set_num_threads(1)
@@ -174,6 +164,9 @@ args.bilateral_grid_shape = [16, 16, 8]
 args.bilateral_grid_lr = 0.003  # Match gsplat's default
 args.lambda_tv_grid = 0.0
 
+# Add checkpoint iterations
+args.checkpoint_iterations = [13999]
+
 args = Args.from_namespace(args.get_parser().parse_args())
 
 args.output_path.mkdir(exist_ok=True, parents=True)
@@ -184,6 +177,9 @@ train_cameras, test_cameras, scene_info = loader.load_dataset(
 
 args.num_samples = min(len(train_cameras), args.num_samples)
 
+with (args.output_path / "config.json").open("w") as f:
+    json.dump(args.as_dict(), f, cls=CustomEncoder)
+
 device = torch.device('cuda')
 if len(args.ckpt) > 0: 
     model = Model.load_ckpt(Path(args.ckpt), device)
@@ -192,7 +188,6 @@ else:
                                 current_sh_deg = args.max_sh_deg if args.sh_interval <= 0 else 0,
                                 **args.as_dict())
 min_t = args.min_t = args.base_min_t * model.scene_scaling.item()
-ic(args.min_t)
 
 tet_optim = TetOptimizer(model, **args.as_dict())
 if args.eval:
@@ -416,6 +411,19 @@ for iteration in progress_bar:
             gc.collect()
             torch.cuda.empty_cache()
 
+    # Save checkpoints at specified iterations
+    if iteration in args.checkpoint_iterations:
+        checkpoint_dir = args.output_path / f"checkpoint_{iteration}"
+        checkpoint_dir.mkdir(exist_ok=True, parents=True)
+        model.save2ply(checkpoint_dir / "ckpt.ply")
+        sd = model.state_dict()
+        sd['indices'] = model.indices
+        torch.save(sd, checkpoint_dir / "ckpt.pth")
+        print(f"Saved checkpoint at iteration {iteration}")
+
+        with (checkpoint_dir / "config.json").open("w") as f:
+            json.dump(args.as_dict(), f, cls=CustomEncoder)
+
     psnr = 20 * math.log10(1.0 / math.sqrt(l2_loss.detach().cpu().item()))
     psnrs[-1].append(psnr)
 
@@ -443,13 +451,6 @@ results = test_util.evaluate_and_save(model, splits, args.output_path, args.tile
 
 with (args.output_path / "results.json").open("w") as f:
     all_data = dict(
-        psnr = avged_psnrs[-1] if len(avged_psnrs) > 0 else 0,
-        **results
-    )
-    json.dump(all_data, f, cls=CustomEncoder)
-
-with (args.output_path / "alldata.json").open("w") as f:
-    all_data = dict(**args.as_dict(), 
         psnr = avged_psnrs[-1] if len(avged_psnrs) > 0 else 0,
         **results
     )

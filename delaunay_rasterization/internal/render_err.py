@@ -7,6 +7,29 @@ import time
 from utils.train_util import fov2focal
 from data.camera import Camera
 from utils.ssim import ssim
+import torch.nn.functional as F
+
+# --- quick, fully-differentiable blur ---------------------------------------
+def gaussian_blur(img: torch.Tensor,
+                  kernel_size: int = 5,
+                  sigma: float = 1.5) -> torch.Tensor:
+    """
+    img : (C,H,W) in [0,1]
+    Returns the same-shaped tensor blurred with a depth-wise Gaussian.
+    """
+    # build 1-D Gaussian
+    coords  = torch.arange(kernel_size, device=img.device) - kernel_size // 2
+    g1d     = torch.exp(-(coords**2) / (2 * sigma**2))
+    g1d     = g1d / g1d.sum()
+
+    # outer product → (k,k) → depth-wise conv kernel (C,1,k,k)
+    g2d     = (g1d[:, None] * g1d[None, :]).to(img.dtype)
+    kernel  = g2d.expand(img.shape[0], 1, kernel_size, kernel_size).contiguous()
+
+    # depth-wise convolution (groups=C)
+    pad = kernel_size // 2
+    return F.conv2d(img.unsqueeze(0), kernel, padding=pad,
+                    groups=img.shape[0]).squeeze(0)
 
 def render_err(gt_image, camera: Camera, model, tile_size=16,
                scene_scaling=1, min_t=0.1, lambda_ssim=0.2, 
@@ -116,13 +139,17 @@ def render_err(gt_image, camera: Camera, model, tile_size=16,
     torch.cuda.synchronize()
     alpha = 1-output_img.permute(2,0,1)[3, ...]
     render_img = output_img.permute(2,0,1)[:3, ...].clip(min=0, max=1)
-    # im = (render_img.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
-    # plt.imshow(im)
-    # plt.show()
-    # l2_err = ((render_img - gt_image)**2).mean(dim=0)
     l1_err = ((render_img - gt_image).abs()).mean(dim=0)
     ssim_err = (1-ssim(render_img, gt_image).mean(dim=0)).clip(min=0, max=1)
     pixel_err = ((1-lambda_ssim) * l1_err + lambda_ssim * ssim_err).contiguous()
+
+    # blur_render = gaussian_blur(render_img, kernel_size=5, sigma=1.0)
+    # blur_gt     = gaussian_blur(gt_image,   kernel_size=5, sigma=1.0)
+    #
+    # l1_err   = (blur_render - blur_gt).abs().mean(dim=0)
+    # ssim_err = (1 - ssim(blur_render, blur_gt).mean(dim=0)).clamp(0, 1)
+    # pixel_err = ((1 - lambda_ssim) * l1_err + lambda_ssim * ssim_err).contiguous()
+
     assert(pixel_err.shape[0] == render_grid.image_height)
     assert(pixel_err.shape[1] == render_grid.image_width)
 

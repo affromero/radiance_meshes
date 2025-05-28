@@ -18,16 +18,20 @@ args.image_folder = "images_4"
 args.output_path = Path("output/test/")
 args.eval = True
 args.use_ply = False
+args.density_threshold = 0.5
+args.alpha_threshold = 0.2
 args = Args.from_namespace(args.get_parser().parse_args())
 
 device = torch.device('cuda')
 if args.use_ply:
-    from models.tet_color import Model
+    # from models.tet_color import Model
+    from models.frozen import FrozenTetModel as Model
     model = Model.load_ply(args.output_path / "ckpt.ply", device)
 else:
-    from models.ingp_color import Model
+    # from models.ingp_color import Model
+    from models.frozen import FrozenTetModel as Model
     model = Model.load_ckpt(args.output_path, device)
-model.extract_mesh(args.output_path / "meshes")
+model.extract_mesh(args.output_path / "meshes", args.density_threshold, args.alpha_threshold)
 # eventually, generate a UV map for each mesh
 # organize onto a texture map
 # then, optimize the texture for each of these maps

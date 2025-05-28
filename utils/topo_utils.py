@@ -345,3 +345,48 @@ def build_tv_struct(verts, tets, device=None):
     areas = 0.5 * torch.linalg.norm(torch.cross(v01, v02, dim=1), dim=1)
 
     return owners, areas[::2]
+
+def max_density_contrast(vertices, indices, density,
+                          mode: str = "diff",
+                          eps: float = 1e-8) -> torch.Tensor:
+    """
+    Maximum *one-way* contrast with respect to face-neighbours.
+
+    Parameters
+    ----------
+    vertices : (V,3)  — float32/64   (only needed so build_tv_struct can compute faces)
+    indices  : (T,4)  — int64        tetrahedron index list
+    density  : (T,)   — float32/64   per-tet density
+    mode     : "diff" | "ratio"
+        "diff"  – max(d_self − d_neigh)             (only neighbours with lower density)
+        "ratio" – max(d_self / d_neigh)             (            »               )
+    eps      : small constant to stabilise division in "ratio".
+
+    Returns
+    -------
+    contrast : (T,)  – max contrast value for each tet, 0 if it is never the higher side
+    """
+    assert mode in ("diff", "ratio")
+
+    # ---- neighbouring tet pairs --------------------------------------------
+    pairs, _ = build_tv_struct(vertices, indices, device=vertices.device)  # (M,2)
+
+    d0 = density[pairs[:, 0]]
+    d1 = density[pairs[:, 1]]
+
+    # Determine which tet in each pair has the higher density
+    first_is_higher = d0 >= d1
+    src_idx   = torch.where(first_is_higher, pairs[:, 0], pairs[:, 1])  # winning tet
+    neigh_idx = torch.where(first_is_higher, pairs[:, 1], pairs[:, 0])  # lower-density neighbour
+
+    if mode == "diff":
+        edge_val = (density[src_idx] - density[neigh_idx])            # positive
+    else:  # "ratio"
+        edge_val = density[src_idx] / (density[neigh_idx] + eps)
+
+    # ---- per-tet maximum over its outgoing edges ---------------------------
+    contrast = torch.zeros_like(density)
+    # PyTorch ≥ 2.1
+    contrast.scatter_reduce_(0, src_idx, edge_val, reduce="amax")
+
+    return contrast
