@@ -87,13 +87,6 @@ def common_camera_properties_from_gsplat(viewmats, Ks, height, width):
 
     return world_view_transform, projection_matrix, cam_pos, fovy, fovx
 
-C0 = 0.28209479177387814
-def RGB2SH(rgb):
-    return (rgb - 0.5) / C0
-
-def SH2RGB(sh):
-    return sh * C0 + 0.5
-
 def inverse_sigmoid(y):
     return torch.log(y / (1 - y))
 
@@ -166,14 +159,15 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
             normed_cc, cell_values[mask] = model.get_cell_values(camera, mask, circumcenter[mask])
         else:
             normed_cc, cell_values = model.get_cell_values(camera, all_circumcenters=circumcenter)
-        if clip_multi is not None:
+        if clip_multi is not None and not model.frozen:
             with torch.no_grad():
                 tet_sens, sensitivity = topo_utils.compute_vertex_sensitivity(model.indices[mask],
-                                                                            vertices, normed_cc, model.contract_vertices)
+                                                                            vertices, normed_cc, True)
+                                                                            # vertices, normed_cc, model.contract_vertices)
                 scaling = clip_multi*sensitivity.reshape(-1, 1).clip(min=1e-5)
             vertices = ClippedGradients.apply(vertices, scaling)
-            extras['normed_cc'] = normed_cc
             extras['cc_sensitivity'] = tet_sens
+        extras['normed_cc'] = normed_cc
 
     image_rgb, distortion_img, tet_alive = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,

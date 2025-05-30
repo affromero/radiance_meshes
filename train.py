@@ -125,7 +125,7 @@ args.lambda_dist = 1e-5
 # Clone Settings
 args.num_samples = 200
 args.clone_lambda_ssim = 0.2
-args.split_std = 0.1
+args.split_std = 1e-4
 args.split_mode = "split_point"
 args.clone_schedule = "quadratic"
 args.min_tet_count = 16
@@ -220,10 +220,45 @@ def target_num(x):
     else:
         raise Exception(f"Clone Schedule: {args.clone_schedule} is not supported")
 
-xs = list(range(N))
-ys = [target_num(i+1) for i in xs]
+# ----------------------------------------------------------------
+# new helper: front‑loaded (high‑frequency‑then‑slow‑down) schedule
+def densify_schedule(start: int,
+                     end: int,
+                     n_events: int,
+                     mode: str = "sqrt"):
+    """
+    Generate `n_events` iteration indices between `start` and `end`
+    with decreasing frequency.  Modes:
+        • 'sqrt'    – spacing ∝ √t   (simple, monotone)
+        • 'exp'     – exponential easing
+        • 'logistic'– S‑curve
+    """
+    t = np.linspace(0.0, 1.0, n_events)
+    if mode == "linear":
+        w = t
+    elif mode == "sqrt":
+        w = t**2                         # lots of points early, sparse later
+    elif mode == "exp":
+        g = 4.0
+        w = (np.exp(g*t) - 1) / (np.exp(g) - 1)
+    elif mode == "logistic":
+        k = 10.0
+        w = 1 / (1 + np.exp(-k*(t-0.5)))
+        w = (w - w.min()) / (w.max() - w.min())
+    else:
+        raise ValueError("mode must be 'sqrt', 'exp', or 'logistic'")
+    iters = np.round(start + w * (end - start)).astype(int)
+    iters[0] = start                     # make sure start & end are included
+    iters[-1] = end
+    return list(np.unique(iters))
+
+dschedule = densify_schedule(args.densify_start,
+                            args.densify_end,
+                            N,
+                            mode="linear")
+targets = [target_num((i - args.densify_start) / num_densify_iter * N+1) for i in dschedule]
 fig = tpl.figure()
-fig.plot(xs, ys, width=100, height=20)
+fig.plot(dschedule, targets, width=100, height=20)
 fig.show()
 
 print("Encoding LR")
@@ -275,7 +310,8 @@ for iteration in progress_bar:
     delaunay_interval = 10 if iteration < args.delaunay_start else 100
     do_delaunay = iteration % delaunay_interval == 0 and iteration < args.freeze_start
     do_freeze = iteration == args.freeze_start
-    do_cloning = max(iteration - args.densify_start, 0) % args.densify_interval == 0 and args.densify_end > iteration >= args.densify_start
+    # do_cloning = max(iteration - args.densify_start, 0) % args.densify_interval == 0 and args.densify_end > iteration >= args.densify_start
+    do_cloning = iteration in dschedule
     do_sh_up = not args.sh_interval == 0 and iteration % args.sh_interval == 0 and iteration > 0
     do_sh_step = iteration % args.sh_step == 0
 
@@ -391,10 +427,12 @@ for iteration in progress_bar:
             sampled_cams = [train_cameras[i] for i in densification_sampler.nextids()]
 
             stats = collect_render_stats(sampled_cams, model, args, device)
-            target_addition = (
-                target_num((iteration - args.densify_start)//args.densify_interval + 1)
-                - model.vertices.shape[0]
-            )
+            target_addition = targets[dschedule.index(iteration)] - model.vertices.shape[0]
+            # ic(dschedule.index(iteration), target_addition)
+            # target_addition = (
+            #     target_num((iteration - args.densify_start)//args.densify_interval + 1)
+            #     - model.vertices.shape[0]
+            # )
 
             apply_densification(
                 stats,

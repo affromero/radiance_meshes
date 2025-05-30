@@ -351,6 +351,11 @@ class Model(nn.Module):
         for i, co in enumerate(["x", "y", "z"]):
             tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
 
+        sh_0 = RGB2SH(base_color_v0_raw)
+        tetra_dict[f"sh_0_r"] = np.ascontiguousarray(sh_0[:, 0])
+        tetra_dict[f"sh_0_g"] = np.ascontiguousarray(sh_0[:, 1])
+        tetra_dict[f"sh_0_b"] = np.ascontiguousarray(sh_0[:, 2])
+
         for i in range(sh_coeffs.shape[1]):
             tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
             tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
@@ -552,7 +557,7 @@ class TetOptimizer:
         self.model.update_triangulation()
 
     @torch.no_grad()
-    def split(self, clone_indices, split_point, split_mode):
+    def split(self, clone_indices, split_point, split_mode, split_std, **kwargs):
         device = self.model.device
         clone_vertices = self.model.vertices[clone_indices]
 
@@ -570,10 +575,9 @@ class TetOptimizer:
             barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
             new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
         elif split_mode == "split_point":
-            split_point += 1e-4*torch.randn(*split_point.shape, device=self.model.device)
+            _, radius = calculate_circumcenters_torch(self.model.vertices[clone_indices])
+            split_point += (split_std * radius.reshape(-1, 1)).clip(min=1e-3, max=3) * torch.randn(*split_point.shape, device=self.model.device)
             new_vertex_location = split_point
-            barycentric_weights = calc_barycentric(split_point, clone_vertices)
-            barycentric_weights = barycentric_weights / (1e-3+barycentric_weights.sum(dim=1, keepdim=True))
             # new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights.unsqueeze(-1)).sum(dim=1)
         elif split_mode == "split_point_c":
             barycentric_weights = calc_barycentric(split_point, clone_vertices)

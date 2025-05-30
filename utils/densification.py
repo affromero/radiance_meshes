@@ -134,14 +134,15 @@ def apply_densification(
                            model.calc_tet_density()).view(-1)
     mask_alive = alphas >= args.clone_min_alpha
     grow_score [~mask_alive] = 0
-    split_score[~mask_alive] = 0
+    split_score [~mask_alive] = 0
+    # split_score[alphas < 0.2] = 0
 
     # ---------- quota for this iteration -------------------------------------
     if target_addition <= 0:   # nothing to do
         return
 
     target_split = int(args.percent_split * target_addition)
-    target_grow  = target_addition - target_split
+    target_grow  = int(target_addition - target_split)
 
     split_mask = torch.zeros_like(split_score, dtype=torch.bool)
     grow_mask  = torch.zeros_like(split_mask)
@@ -187,7 +188,7 @@ def apply_densification(
 
     tet_optim.split(clone_indices,
                     split_point[clone_mask],
-                    args.split_mode)
+                    **args.as_dict())
 
     # ---------- velocity-based additions -------------------------------------
     raw_verts    = model.contracted_vertices

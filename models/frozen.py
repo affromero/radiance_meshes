@@ -237,6 +237,10 @@ class FrozenTetModel(nn.Module):
         for i, co in enumerate(["x", "y", "z"]):
             tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
 
+        sh_0 = RGB2SH(base_color_v0_raw)
+        tetra_dict[f"sh_0_r"] = np.ascontiguousarray(sh_0[:, 0])
+        tetra_dict[f"sh_0_g"] = np.ascontiguousarray(sh_0[:, 1])
+        tetra_dict[f"sh_0_b"] = np.ascontiguousarray(sh_0[:, 2])
         for i in range(sh_coeffs.shape[1]):
             tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
             tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
