@@ -27,11 +27,12 @@ from data.types import BasicPointCloud
 from simple_knn._C import distCUDA2
 from utils import mesh_util
 from utils.model_util import *
+from models.base_model import BaseModel
 
 torch.set_float32_matmul_precision('high')
 
 
-class Model(nn.Module):
+class Model(BaseModel):
     def __init__(self,
                  vertices: torch.Tensor,
                  ext_vertices: torch.Tensor,
@@ -106,7 +107,7 @@ class Model(nn.Module):
         return normed_cc, features
 
     @staticmethod
-    def init_from_pcd(point_cloud, cameras, device, max_sh_deg, ext_convex_hull,
+    def init_from_pcd(point_cloud, cameras, device, max_sh_deg,
                       voxel_size=0.00, init_repeat=3, **kwargs):
         torch.manual_seed(2)
 
@@ -128,7 +129,7 @@ class Model(nn.Module):
 
         N = point_cloud.points.shape[0]
         vertices = torch.as_tensor(np.asarray(o3d_pcd.points)).float()
-        vertices = vertices + torch.randn(*vertices.shape) * 1e-2
+        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
 
         ccenters = torch.stack([c.camera_center.reshape(3) for c in cameras], dim=0).to(device)
         center = ccenters.mean(dim=0)
@@ -138,7 +139,7 @@ class Model(nn.Module):
         pcd_scaling = torch.linalg.norm(vertices - center.cpu().reshape(1, 3), dim=1, ord=2).max()
         new_radius = pcd_scaling.cpu().item()
 
-        vertices = sample_uniform_in_sphere(10000, 3, base_radius=0, radius=new_radius, device='cpu') + center.reshape(1, 3).cpu()
+        # vertices = sample_uniform_in_sphere(10000, 3, base_radius=0, radius=new_radius, device='cpu') + center.reshape(1, 3).cpu()
 
         # vertices = vertices + torch.randn(*vertices.shape) * 1e-3
         # v = Del(vertices.shape[0])
@@ -148,27 +149,18 @@ class Model(nn.Module):
         # vertices = vertices[indices_np].mean(dim=1)
         # vertices = vertices + torch.randn(*vertices.shape) * 1e-3
 
-        if ext_convex_hull:
-            ext_vertices = expand_convex_hull(vertices, 5, device=vertices.device)
-            num_ext = ext_vertices.shape[0]
-        else:
-            # within_sphere = sample_uniform_in_sphere(10000, 3, base_radius=new_radius, radius=new_radius, device='cpu') + center.reshape(1, 3).cpu()
-            # vertices = torch.cat([vertices, within_sphere], dim=0)
-            num_ext = 1000
-            ext_vertices = fibonacci_spiral_on_sphere(num_ext, new_radius, device='cpu') + center.reshape(1, 3).cpu()
+        # within_sphere = sample_uniform_in_sphere(10000, 3, base_radius=new_radius, radius=new_radius, device='cpu') + center.reshape(1, 3).cpu()
+        # vertices = torch.cat([vertices, within_sphere], dim=0)
+        num_ext = 1000
+        ext_vertices = fibonacci_spiral_on_sphere(num_ext, new_radius, device='cpu') + center.reshape(1, 3).cpu()
         num_ext = ext_vertices.shape[0]
 
-        # num_ext = 1000
-        # ext_vertices = fibonacci_spiral_on_sphere(num_ext, 2* pcd_scaling.cpu(), device='cpu') + center.reshape(1, 3).cpu()
-
-        vertices = nn.Parameter(vertices.cuda())
-        model = Model(vertices, ext_vertices, center, scaling, max_sh_deg=max_sh_deg, **kwargs)
+        model = Model(vertices.cuda(), ext_vertices, center, scaling,
+                      max_sh_deg=max_sh_deg, **kwargs)
         return model
 
     def compute_batch_features(self, vertices, indices, start, end, circumcenters=None):
         if circumcenters is None:
-            # circumcenter, cv, cr, normalized =  pre_calc_cell_values(
-            #     vertices, indices[start:end], self.center, self.scene_scaling)
             tets = vertices[indices[start:end]]
             circumcenter, radius = calculate_circumcenters_torch(tets.double())
         else:
@@ -182,9 +174,6 @@ class Model(nn.Module):
 
     @staticmethod
     def load_ckpt(path: Path, device):
-        # data_dict = tinyplypy.read_ply(str(path / "ckpt.ply"))
-        # tet_data = data_dict["tetrahedron"]
-        # indices = tet_data["vertex_indices"]  # shape (N,4)
         ckpt_path = path / "ckpt.pth"
         config_path = path / "config.json"
         config = Args.load_from_json(str(config_path))
@@ -203,77 +192,6 @@ class Model(nn.Module):
         model.indices = torch.as_tensor(indices).cuda()
         return model
 
-    @torch.no_grad
-    def perturb_vertices(self, perturbation):
-        if self.contract_vertices:
-            norm_verts = (self.vertices - self.center) / self.scene_scaling 
-            J_d = contraction_jacobian_d_in_chunks(norm_verts).float().reshape(-1, 1)
-        else:
-            J_d = 1
-        self.contracted_vertices.data += (J_d * perturbation)[:self.contracted_vertices.shape[0]]
-
-    def calc_vert_alpha(self):
-        tet_alphas = self.calc_tet_alpha()
-        vertex_alpha = torch.zeros((self.vertices.shape[0],), device=self.device)
-        indices = self.indices.long()
-
-        reduce_type = "amax"
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 0], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 1], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 2], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 3], src=tet_alphas, reduce=reduce_type)
-        return vertex_alpha
-
-    def calc_tet_area(self):
-        verts = self.vertices
-        v0, v1, v2, v3 = verts[self.indices].unbind(dim=1)
-        mat = torch.stack([v1-v0, v2-v0, v3-v0], dim=-1)
-        return torch.det(mat).abs() / 6.0
-
-    def calc_vert_density(self):
-        verts = self.vertices
-        vertex_density = torch.zeros((verts.shape[0],), device=self.device)
-        indices = self.indices.long()
-        for start in range(0, self.indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, self.indices.shape[0])
-            
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
-
-            density = density.reshape(-1)
-            indices_chunk = indices[start:end]
-            reduce_type = "amax"
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 0], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 1], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 2], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 3], src=density, reduce=reduce_type)
-        return vertex_density
-
-    def calc_tet_alpha(self):
-        alpha_list = []
-        start = 0
-        
-        verts = self.vertices
-        for start in range(0, self.indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, self.indices.shape[0])
-            
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
-
-            indices_chunk = self.indices[start:end]
-            v0, v1, v2, v3 = verts[indices_chunk[:, 0]], verts[indices_chunk[:, 1]], verts[indices_chunk[:, 2]], verts[indices_chunk[:, 3]]
-            
-            edge_lengths = torch.stack([
-                torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
-                torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
-            ], dim=0).max(dim=0)[0]
-            
-            # Compute the maximum possible alpha using the largest edge length
-            alpha = 1 - torch.exp(-density.reshape(-1) * edge_lengths.reshape(-1))
-            alpha_list.append(alpha)
-            del edge_lengths, density
-        
-        alphas = torch.cat(alpha_list, dim=0)
-        return alphas
-
     def calc_tet_density(self):
         densities = []
         verts = self.vertices
@@ -285,77 +203,31 @@ class Model(nn.Module):
             densities.append(density.reshape(-1))
         return torch.cat(densities)
 
-    @torch.no_grad
-    def extract_mesh(self, path, density_threshold=0.5):
-        path.mkdir(exist_ok=True, parents=True)
-        mask = self.calc_tet_density() > density_threshold
-        verts = self.vertices
-        meshes = mesh_util.extract_meshes(verts.detach().cpu().numpy(), self.indices[mask])
-        for i, mesh in enumerate(meshes):
-            F = mesh['face']['vertex_indices']
-            if F > 1000:
-                mpath = path / f"{i}.ply"
-                print(f"Saving #F:{F} to {mpath}")
-                tinyplypy.write_ply(str(mpath), mesh, is_binary=False)
-
-    @torch.no_grad
-    def save2ply(self, path):
-        path.parent.mkdir(exist_ok=True, parents=True)
-
-        xyz = self.vertices.detach().cpu().numpy().astype(np.float32)  # shape (num_vertices, 3)
-
-        vertex_dict = {
-            "x": xyz[:, 0],
-            "y": xyz[:, 1],
-            "z": xyz[:, 2],
-        }
-
-        N = self.indices.shape[0]
-        densities = np.zeros((N), dtype=np.float32)
-        grds = np.zeros((N, 3), dtype=np.float32)
-        sh_dim = ((self.max_sh_deg+1)**2-1)
-        sh_coeffs = np.zeros((N, sh_dim, 3), dtype=np.float32)
-
+    def compute_features(self, offset=False):
         vertices = self.vertices
         indices = self.indices
+        cs, ds, rs, gs, ss = [], [], [], [], []
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
 
             circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
             tets = vertices[indices[start:end]]
-            base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
-            base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
-            normed_grd = normed_grd.cpu().numpy().astype(np.float32)
-            density = density.cpu().numpy().astype(np.float32)
-            sh_coeff = sh.reshape(-1, sh_dim, 3)
-            sh_coeffs[start:end] = sh_coeff.cpu().numpy()
-            grds[start:end] = normed_grd.reshape(-1, 3)
-            densities[start:end] = density.reshape(-1)
-
-        tetra_dict = {}
-        tetra_dict["vertex_indices"] = self.indices.cpu().numpy().astype(np.int32)
-        tetra_dict["s"] = np.ascontiguousarray(densities)
-        for i, co in enumerate(["x", "y", "z"]):
-            tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
-
-        sh_0 = RGB2SH(base_color_v0_raw)
-        ic(sh_0.shape)
-        tetra_dict[f"sh_0_r"] = np.ascontiguousarray(sh_0[:, 0])
-        tetra_dict[f"sh_0_g"] = np.ascontiguousarray(sh_0[:, 1])
-        tetra_dict[f"sh_0_b"] = np.ascontiguousarray(sh_0[:, 2])
-
-        for i in range(sh_coeffs.shape[1]):
-            tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
-            tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
-            tetra_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(sh_coeffs[:, i, 2])
-
-
-        data_dict = {
-            "vertex": vertex_dict,
-            "tetrahedron": tetra_dict,
-        }
-
-        tinyplypy.write_ply(str(path), data_dict, is_binary=True)
+            cs.append(circumcenters)
+            ds.append(density)
+            ss.append(sh)
+            if offset:
+                base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
+                rs.append(base_color_v0_raw)
+                gs.append(normed_grd)
+            else:
+                rs.append(rgb)
+                gs.append(grd)
+        cs = torch.cat(cs, dim=0)
+        ds = torch.cat(ds, dim=0)
+        rs = torch.cat(rs, dim=0)
+        gs = torch.cat(gs, dim=0)
+        ss = torch.cat(ss, dim=0)
+        return cs, ds, rs, gs, ss
 
     def inv_contract(self, points):
         return inv_contract_points(points) * self.scene_scaling + self.center
@@ -458,16 +330,9 @@ class TetOptimizer:
             {"params": [model.contracted_vertices], "lr": self.vert_lr_multi*vertices_lr, "name": "contracted_vertices"},
         ])
         self.model = model
-        self.tracker_n = 0
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
         self.split_std = split_std
-
-        self.dist_scheduler = get_expon_lr_func(lr_init=lambda_dist,
-                                                lr_final=lambda_dist,
-                                                lr_delay_mult=1e-8,
-                                                lr_delay_steps=dist_delay,
-                                                max_steps=max_steps)
 
         base_net_scheduler = get_expon_lr_func(lr_init=network_lr,
                                                 lr_final=final_network_lr,
@@ -507,14 +372,10 @@ class TetOptimizer:
         self.vertex_scheduler_args = base_vertex_scheduler
         self.iteration = 0
 
-    def lambda_dist(self, iteration):
-        return float(self.dist_scheduler(iteration))
-
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
         self.iteration = iteration
         for param_group in self.net_optim.param_groups:
-            # if param_group["name"] == "network":
             ratio = self.ratios[param_group["name"]]
             lr = self.net_scheduler_args(iteration)
             param_group['lr'] = ratio * lr
@@ -527,9 +388,6 @@ class TetOptimizer:
                 lr = self.vertex_scheduler_args(iteration)
                 self.vertex_lr = lr
                 param_group['lr'] = lr
-
-    def update_ema(self):
-        self.ema.update()
 
     def add_points(self, new_verts: torch.Tensor, raw_verts=False):
         if self.model.contract_vertices and not raw_verts:
@@ -587,10 +445,6 @@ class TetOptimizer:
     @property
     def sh_optim(self):
         return None
-
-    def clip_gradient(self, grad_clip):
-        for module in self.model.backbone.encoding.embeddings:
-            torch.nn.utils.clip_grad_norm_(module.parameters(), grad_clip, error_if_nonfinite=True)
 
     def regularizer(self, render_pkg):
         weight_decay = self.weight_decay * sum([(embed.weight**2).mean() for embed in self.model.backbone.encoding.embeddings])

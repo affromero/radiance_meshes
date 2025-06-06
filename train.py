@@ -33,10 +33,7 @@ import gc
 from utils.densification import collect_render_stats, apply_densification
 import mediapy
 
-
 torch.set_num_threads(1)
-
-
 
 class CustomEncoder(json.JSONEncoder):
     def default(self, o):
@@ -92,8 +89,10 @@ args.density_offset = -4
 args.density_beta = 0.5
 args.weight_decay = 0.01
 args.hashmap_dim = 4
+
 args.grad_clip = 1e-2
 args.spike_duration = 350
+
 args.k_samples = 1
 args.trunc_sigma = 0.3
 
@@ -111,14 +110,13 @@ args.sh_lr = 1e-3
 args.lr_delay = 0
 args.vert_lr_delay = 50
 args.vertices_lr = 1e-4
-args.final_vertices_lr = 5e-8
+args.final_vertices_lr = 1e-6
 args.vertices_lr_delay_multi = 1e-8
 args.vertices_beta = [0.9, 0.99]
 args.contract_vertices = False
-args.clip_multi = 1e-1
+args.clip_multi = 1e-2
 args.delaunay_start = 17000
 args.freeze_start = 17000
-args.ext_convex_hull = False
 
 # Distortion Settings
 args.lambda_dist = 1e-5
@@ -130,7 +128,6 @@ args.split_std = 1e-4
 args.split_mode = "split_point"
 args.clone_schedule = "quadratic"
 args.min_tet_count = 16
-args.prune_density_threshold = 0.0
 args.densify_start = 1000
 args.densify_end = 15000
 args.densify_interval = 500
@@ -138,35 +135,24 @@ args.budget = 2_000_000
 args.clone_velocity = 0.1
 args.speed_mul = 100
 args.clone_min_alpha = 0.05
-args.clone_min_density = 1e-3
-args.normalize_err = False
 args.percent_split = 1.0
-args.density_t = 1.0
 args.diff_threshold = 0.0
-
-args.lambda_noise = 0.0
-args.perturb_t = 1-0.005
 
 args.lambda_ssim = 0.2
 args.base_min_t = 0.2
 args.sample_cam = 4
 args.data_device = 'cpu'
-args.lambda_alpha = 0.0
-args.lambda_density = 0.0
-args.lambda_color = 0.0
 args.lambda_tv = 0.0
 args.density_threshold = 0.0
+
 args.voxel_size = 0.05
 args.init_repeat = 1
 
-# Bilateral grid arguments
-# Bilateral grid parameters
 args.use_bilateral_grid = False
 args.bilateral_grid_shape = [16, 16, 8]
-args.bilateral_grid_lr = 0.003  # Match gsplat's default
+args.bilateral_grid_lr = 0.003
 args.lambda_tv_grid = 0.0
 
-# Add checkpoint iterations
 args.checkpoint_iterations = [13999]
 
 args = Args.from_namespace(args.get_parser().parse_args())
@@ -304,8 +290,6 @@ if args.use_bilateral_grid:
 video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*'avc1'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
 
-# cc_locations = []
-
 tet_optim.build_tv()
 progress_bar = tqdm(range(args.iterations))
 torch.cuda.empty_cache()
@@ -313,14 +297,13 @@ for iteration in progress_bar:
     delaunay_interval = 10 if iteration < args.delaunay_start else 100
     do_delaunay = iteration % delaunay_interval == 0 and iteration < args.freeze_start
     do_freeze = iteration == args.freeze_start
-    # do_cloning = max(iteration - args.densify_start, 0) % args.densify_interval == 0 and args.densify_end > iteration >= args.densify_start
     do_cloning = iteration in dschedule
     do_sh_up = not args.sh_interval == 0 and iteration % args.sh_interval == 0 and iteration > 0
     do_sh_step = iteration % args.sh_step == 0
 
     if do_delaunay or do_freeze:
         st = time.time()
-        # tet_optim.update_triangulation(density_threshold=args.density_threshold, high_precision=do_freeze)
+        tet_optim.update_triangulation(density_threshold=args.density_threshold, high_precision=do_freeze)
         if do_freeze:
             del tet_optim
             model, tet_optim = freeze_model(model, **args.as_dict())
@@ -337,16 +320,11 @@ for iteration in progress_bar:
 
     st = time.time()
     ray_jitter = torch.rand((camera.image_height, camera.image_width, 2), device=device)
-    bg = 0
-    render_pkg = render(camera, model, bg=bg, scene_scaling=model.scene_scaling, ray_jitter=ray_jitter, **args.as_dict())
+    render_pkg = render(camera, model, scene_scaling=model.scene_scaling, ray_jitter=ray_jitter, **args.as_dict())
     image = render_pkg['render']
 
-    # ----- Apply bilateral grid transformation if enabled -----
     if args.use_bilateral_grid:
-        # Get camera ID for this viewpoint
         camera_id = camera_inds[camera.uid]
-        
-        # Create normalized pixel coordinates [0,1]
         h, w = image.shape[1], image.shape[2]
         y_coords, x_coords = torch.meshgrid(
             (torch.arange(h, device="cuda") + 0.5) / h,
@@ -354,20 +332,11 @@ for iteration in progress_bar:
             indexing="ij"
         )
         coords = torch.stack([x_coords, y_coords], dim=-1).reshape(-1, 2)
-        
-        # Reshape image for bilateral grid transformation
         img_for_bil = image.permute(1, 2, 0).reshape(-1, 3)
-        
-        # Create image IDs tensor (all pixels have same image ID)
         img_ids = torch.full((img_for_bil.shape[0],), camera_id, 
                               device="cuda", dtype=torch.long)
-        
-        # Apply bilateral transformation
         transformed = slice(bil_grids, coords, img_for_bil, img_ids)
-        
-        # Reshape back to original format
         image = transformed["rgb"].reshape(h, w, 3).permute(2, 0, 1)
-    # --------------------------------------------------------
 
     l1_loss = (target - image).abs().mean()
     l2_loss = ((target - image)**2).mean()
@@ -379,16 +348,11 @@ for iteration in progress_bar:
            reg + \
            args.lambda_dist * dl_loss
 
-    # ----- Add total variation loss for bilateral grid if enabled -----
-    tvloss = None
     if args.use_bilateral_grid:
-        # Use the configurable lambda_tv parameter (default is 10.0)
         tvloss = args.lambda_tv_grid * total_variation_loss(bil_grids.grids)
         loss += tvloss
-    # --------------------------------------------------------------
 
     mask = render_pkg['mask']
-    cc = render_pkg['normed_cc']
     st = time.time()
 
     loss.backward()
@@ -404,12 +368,10 @@ for iteration in progress_bar:
         tet_optim.vertex_optim.step()
         tet_optim.vertex_optim.zero_grad()
 
-    # ----- Update bilateral grid if enabled -----
     if args.use_bilateral_grid:
         bil_optimizer.step()
         bil_optimizer.zero_grad(set_to_none=True)
         bil_scheduler.step()
-    # ------------------------------------------
 
     tet_optim.update_learning_rate(iteration)
 
@@ -431,11 +393,6 @@ for iteration in progress_bar:
 
             stats = collect_render_stats(sampled_cams, model, args, device)
             target_addition = targets[dschedule.index(iteration)] - model.vertices.shape[0]
-            # ic(dschedule.index(iteration), target_addition)
-            # target_addition = (
-            #     target_num((iteration - args.densify_start)//args.densify_interval + 1)
-            #     - model.vertices.shape[0]
-            # )
 
             apply_densification(
                 stats,

@@ -113,7 +113,7 @@ def safe_sin(x):
     return safe_trig_helper(x, torch.sin)
 
 
-def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.1,
+def render(camera: Camera, model, cell_values=None, tile_size=16, min_t=0.1,
            scene_scaling=1, clip_multi=1e-1, ray_jitter=None,
            **kwargs):
     device = model.device
@@ -166,8 +166,6 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
                                                                             # vertices, normed_cc, model.contract_vertices)
                 scaling = clip_multi*sensitivity.reshape(-1, 1).clip(min=1e-5)
             vertices = ClippedGradients.apply(vertices, scaling)
-            extras['cc_sensitivity'] = tet_sens
-        extras['normed_cc'] = normed_cc
 
     image_rgb, distortion_img, tet_alive = AlphaBlendTiledRender.apply(
         sorted_tetra_idx,
@@ -186,18 +184,8 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         ray_jitter)
     alpha = image_rgb.permute(2,0,1)[3, ...]
     total_density = (distortion_img[:, :, 2]**2).clip(min=1e-6)
-    # total_density = ((1-alpha) ** 2).clip(min=1e-6)
     distortion_loss = (((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4]) / total_density).clip(min=0)
-    # distortion_loss = (((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4])).clip(min=0)
-    vert_alive = torch.zeros((vertices.shape[0]), dtype=bool, device=device)
     
-    indices = model.indices.long()
-    reduce_type = "sum"
-    vert_alive.scatter_reduce_(dim=0, index=indices[..., 0], src=tet_alive, reduce=reduce_type)
-    vert_alive.scatter_reduce_(dim=0, index=indices[..., 1], src=tet_alive, reduce=reduce_type)
-    vert_alive.scatter_reduce_(dim=0, index=indices[..., 2], src=tet_alive, reduce=reduce_type)
-    vert_alive.scatter_reduce_(dim=0, index=indices[..., 3], src=tet_alive, reduce=reduce_type)
-
     render_pkg = {
         'render': image_rgb.permute(2,0,1)[:3, ...],
         'alpha': alpha,
@@ -208,59 +196,9 @@ def render(camera: Camera, model, bg=0, cell_values=None, tile_size=16, min_t=0.
         'tet_area': tet_area,
         'density': cell_values[:, 0],
         'mask': mask,
-        'vert_alive': vert_alive,
         **extras
     }
     return render_pkg
-
-def compute_alpha(inds, vertices, density, mask=None):
-    if mask is not None:
-        inds = inds[mask]
-        density = density[mask]
-    verts = vertices
-    device = verts.device
-    v0, v1, v2, v3 = verts[inds[:, 0]], verts[inds[:, 1]], verts[inds[:, 2]], verts[inds[:, 3]]
-    
-    edge_lengths = torch.stack([
-        torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
-        torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
-    ], dim=0).max(dim=0)[0].detach()
-    
-    # Compute the maximum possible alpha using the largest edge length
-    alpha = 1 - torch.exp(-density.reshape(-1, 1) * edge_lengths.reshape(-1, 1))
-    return alpha
-
-# @torch.jit.script
-# def compute_v_perturbation(inds, verts, cc, alpha, mask, cc_sensitivity, lr:float, k:float=100, t:float=(1-0.005)):
-#     inds = inds[mask]
-#     device = verts.device
-#     # tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * cc_sensitivity.reshape(-1, 1) * torch.randn((inds.shape[0], 3), device=device)
-#     tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * torch.randn((inds.shape[0], 3), device=device)
-#     ic(tet_perturb[alpha > t].mean())
-#     # tet_perturb = lr * torch.sigmoid(-k*(alpha - t)) * torch.randn((inds.shape[0], 3), device=device)
-#     v_perturb = torch.full((verts.shape[0],3), 0.0, device=device)
-#     inds_l = inds.long()
-#     reduce_type = "sum"
-#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 0:1], src=tet_perturb, reduce=reduce_type)
-#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 1:2], src=tet_perturb, reduce=reduce_type)
-#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 2:3], src=tet_perturb, reduce=reduce_type)
-#     v_perturb.scatter_reduce_(dim=0, index=inds_l[..., 3:4], src=tet_perturb, reduce=reduce_type)
-#     return v_perturb
-#
-# @torch.jit.script
-def compute_v_perturbation(inds, verts, cc, density, mask, cc_sensitivity, lr:float, k:float=100, t:float=(1-0.005)):
-    inds = inds[mask].long()
-    vertex_alpha = torch.zeros((verts.shape[0],), device=inds.device)
-    device = verts.device
-
-    alpha = density.reshape(-1)
-    reduce_type = "amax"
-    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 0], src=alpha, reduce=reduce_type)
-    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 1], src=alpha, reduce=reduce_type)
-    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 2], src=alpha, reduce=reduce_type)
-    vertex_alpha.scatter_reduce_(dim=0, index=inds[..., 3], src=alpha, reduce=reduce_type)
-    v_perturb = lr * torch.sigmoid(-k*(vertex_alpha - t)).reshape(-1, 1) * torch.randn((verts.shape[0], 3), device=device)
-    return v_perturb
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
@@ -445,10 +383,8 @@ def get_approx_ray_intersections(split_rays_data, epsilon=1e-7):
 
     # Clamp parameters to [0, 1] to stay within the segments
     bad_intersect = (s_line < 0) | (t_line < 0) | (s_line > 1) | (t_line > 1)
-    s_seg = torch.clamp(s_line, 0.0, 1.0) - 2
-    t_seg = torch.clamp(t_line, 0.0, 1.0) - 2
-    # s_seg = s_line.clip(min=0)
-    # t_seg = t_line.clip(min=0)
+    s_seg = torch.clamp(s_line, 0.0, 1.0)
+    t_seg = torch.clamp(t_line, 0.0, 1.0)
 
     # Points of closest approach on the segments
     pc1 = o1 + s_seg.unsqueeze(1) * d1

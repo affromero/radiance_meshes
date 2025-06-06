@@ -206,11 +206,11 @@ class iNGPDW(nn.Module):
                 [g_init, s_init, d_init, c_init]):
                 last = network[-1]
                 with torch.no_grad():
-                    init.uniform(last.weight.data, a=-eps, b=eps)
+                    init.uniform_(last.weight.data, a=-eps, b=eps)
                     # nn.init.xavier_uniform_(m.weight, gain)
-                    # last.weight.zero_()
                     last.bias.zero_()
-                # self.gradient_net[-1].weight.data.fill_(5e-1)
+
+
     def _encode(self, x: torch.Tensor, cr: torch.Tensor):
         x = x.detach()
         output = self.encoding(x).float()
@@ -221,8 +221,6 @@ class iNGPDW(nn.Module):
                          safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
         scaling = torch.erf(erf_x)
         output = output * scaling
-        # sphere_area = 4/3*math.pi*cr**3
-        # scaling = safe_div(base_resolution * per_level_scale**n, sphere_area.reshape(-1, 1, 1)).clip(max=1)
         return output
 
 
@@ -245,12 +243,6 @@ class iNGPDW(nn.Module):
             output = self._encode(x, cr)
 
         h = output.reshape(-1, self.L * self.dim)
-        # output = self.network(h)
-        # sigma = output[:, :1]
-        # temp = output[:, 1:12+1]
-        # rgb = temp[:, :3]
-        # field_samples = temp[:, 3:12]
-        # sh = output[:, 13:]
 
         sigma = self.density_net(h)
         rgb = self.color_net(h)
@@ -259,9 +251,6 @@ class iNGPDW(nn.Module):
 
         rgb = rgb.reshape(-1, 3, 1) + 0.5
         density = safe_exp(sigma+self.density_offset)
-        # density = torch.nn.functional.softplus(sigma+self.density_offset, beta=self.density_beta)
         grd = torch.tanh(field_samples.reshape(-1, 1, 3)) / math.sqrt(3)
-        # grd = torch.tanh(field_samples) / math.sqrt(3)
-        # grd = torch.tanh(field_samples.reshape(-1, 3, 3)) / math.sqrt(3)
         # grd = rgb * torch.tanh(field_samples.reshape(-1, 3, 3))  # shape (T, 3, 3)
         return density, rgb.reshape(-1, 3), grd, sh

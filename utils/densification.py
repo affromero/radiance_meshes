@@ -50,7 +50,6 @@ def collect_render_stats(
             target, cam, model,
             scene_scaling=model.scene_scaling,
             tile_size=args.tile_size,
-            density_t=args.density_t,
             lambda_ssim=args.clone_lambda_ssim
         )
 
@@ -64,11 +63,7 @@ def collect_render_stats(
         s0 = image_votes[:, 0]
         N, s1, s2  = tc, image_votes[:, 1], image_votes[:, 2]
         split_mu    = safe_math.safe_div(s1, N)
-        # split_std   = safe_math.safe_div(s2, N-1) - safe_math.safe_div(s1, N) * safe_math.safe_div(s1, N-1)
         split_std   = safe_math.safe_div(s2, N) - split_mu**2
-        # ic(safe_math.safe_div(s2, N)[N > 10], safe_math.safe_div(s1, N)[N > 10])
-        # ic(split_std.min(), split_std.mean(), split_mu, (split_std > 0).sum())
-        # split_std[s0 < 1]   = 0
         split_std[N < 10] = 0
         split_std[split_mask] = 0
 
@@ -93,7 +88,6 @@ def collect_render_stats(
 
         # -------- Grow --------------------------------------------------------
         grow_mask = (tc < 8000) & (tc > args.min_tet_count)
-        # total_grow_moments[grow_mask] += image_votes[grow_mask, 3:6]
         total_grow_moments[grow_mask, 0] += s0[grow_mask]
         total_grow_moments[grow_mask, 1] += s1[grow_mask]
         total_grow_moments[grow_mask, 2] += s2[grow_mask]
@@ -143,17 +137,13 @@ def apply_densification(
     grow_std    = safe_math.safe_div(s2, N) - grow_mu**2
     grow_std[N < 10] = 0
     grow_score  = (s0 + 1e-3 * N) * grow_std.clip(min=0)
-    # ic(grow_std.min(), grow_mu[N > 10], safe_math.safe_div(s2, N)[N > 10], grow_std[N>10])
 
-    alphas = compute_alpha(model.indices,
-                           model.vertices,
-                           model.calc_tet_density()).view(-1)
+    alphas = model.calc_tet_alpha(mode="max")
     mask_alive = alphas >= args.clone_min_alpha
     grow_score [~mask_alive] = 0
     split_score [~mask_alive] = 0
 
-    # ---------- quota for this iteration -------------------------------------
-    if target_addition < 0:   # nothing to do
+    if target_addition < 0:
         return
 
     target_split = int(args.percent_split * target_addition)
@@ -165,7 +155,7 @@ def apply_densification(
     if target_grow > 0:
         top_grow = torch.topk(grow_score, target_grow).indices
         grow_mask[top_grow] = grow_score[top_grow] > 0
-        split_score[grow_mask] = 0      # exclude from split
+        split_score[grow_mask] = 0
 
     if target_split > 0:
         top_split = torch.topk(split_score, target_split).indices
@@ -235,7 +225,7 @@ def apply_densification(
         f"#T_Grow: {target_grow:4d}  "
         f"Grow Avg: {grow_score[grow_mask].mean():.4f}  "
         f"Split Avg: {split_score[split_mask].mean():.4f}  "
-            f"Avg Speed: {speed.mean():.4e}  "
+        f"Avg Speed: {speed.mean():.4e}  "
         f"By Vel: {num_cloned}  "
         f"T_Added: {target_addition}"
     )

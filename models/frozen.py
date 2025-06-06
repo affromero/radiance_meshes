@@ -17,9 +17,10 @@ from utils.safe_math import safe_log, safe_exp
 from utils.train_util import get_expon_lr_func, SpikingLR
 from utils import mesh_util
 from utils.args import Args
+from models.base_model import BaseModel
 
 
-class FrozenTetModel(nn.Module):
+class FrozenTetModel(BaseModel):
     """Minimal field representation with *fixed* tetrahedral geometry.
 
     The iNGP backbone is entirely removed; instead, each tetrahedron stores its
@@ -168,6 +169,17 @@ class FrozenTetModel(nn.Module):
 
         return circumcenter, normalized, density, rgb, grd, sh
 
+    def compute_features(self, offset=False):
+        vertices = self.vertices
+        indices = self.indices
+        circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
+        tets = vertices[indices]
+        if offset:
+            base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
+            return circumcenters, density, base_color_v0_raw, normed_grd, sh
+        else:
+            return circumcenters, density, rgb, grd, sh
+
     # ------------------------------------------------------------------
     # public renderer interface
     # ------------------------------------------------------------------
@@ -197,188 +209,15 @@ class FrozenTetModel(nn.Module):
     def update_triangulation(self, *_, **__):
         return None
 
-    def __len__(self):
-        return self.vertices.shape[0]
-
-    @torch.no_grad
-    def save2ply(self, path):
-        path.parent.mkdir(exist_ok=True, parents=True)
-
-        xyz = self.vertices.detach().cpu().numpy().astype(np.float32)  # shape (num_vertices, 3)
-
-        vertex_dict = {
-            "x": xyz[:, 0],
-            "y": xyz[:, 1],
-            "z": xyz[:, 2],
-        }
-
-        N = self.indices.shape[0]
-        densities = np.zeros((N), dtype=np.float32)
-        grds = np.zeros((N, 3), dtype=np.float32)
-        sh_dim = ((self.max_sh_deg+1)**2-1)
-        sh_coeffs = np.zeros((N, sh_dim, 3), dtype=np.float32)
-
-        vertices = self.vertices
-        indices = self.indices
-        circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
-        tets = vertices[indices]
-        base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
-        base_color_v0_raw = base_color_v0_raw.cpu().numpy().astype(np.float32)
-        normed_grd = normed_grd.cpu().numpy().astype(np.float32)
-        density = density.cpu().numpy().astype(np.float32)
-        sh_coeff = sh.reshape(-1, sh_dim, 3)
-        sh_coeffs = sh_coeff.cpu().numpy()
-        grds = normed_grd.reshape(-1, 3)
-        densities = density.reshape(-1)
-
-        tetra_dict = {}
-        tetra_dict["vertex_indices"] = self.indices.cpu().numpy().astype(np.int32)
-        tetra_dict["s"] = np.ascontiguousarray(densities)
-        for i, co in enumerate(["x", "y", "z"]):
-            tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])
-
-        sh_0 = RGB2SH(base_color_v0_raw)
-        tetra_dict[f"sh_0_r"] = np.ascontiguousarray(sh_0[:, 0])
-        tetra_dict[f"sh_0_g"] = np.ascontiguousarray(sh_0[:, 1])
-        tetra_dict[f"sh_0_b"] = np.ascontiguousarray(sh_0[:, 2])
-        for i in range(sh_coeffs.shape[1]):
-            tetra_dict[f"sh_{i+1}_r"] = np.ascontiguousarray(sh_coeffs[:, i, 0])
-            tetra_dict[f"sh_{i+1}_g"] = np.ascontiguousarray(sh_coeffs[:, i, 1])
-            tetra_dict[f"sh_{i+1}_b"] = np.ascontiguousarray(sh_coeffs[:, i, 2])
-
-
-        data_dict = {
-            "vertex": vertex_dict,
-            "tetrahedron": tetra_dict,
-        }
-
-        tinyplypy.write_ply(str(path), data_dict, is_binary=True)
-
     @property
     def num_int_verts(self):
         return self.contracted_vertices.shape[0]
-
-    def get_circumcenters(self):
-        circumcenter =  pre_calc_cell_values(
-            self.vertices, self.indices, self.center, self.scene_scaling)
-        return circumcenter
-
-    def calc_vert_alpha(self):
-        tet_alphas = self.calc_tet_alpha()
-        vertex_alpha = torch.zeros((self.vertices.shape[0],), device=self.device)
-        indices = self.indices.long()
-
-        reduce_type = "amax"
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 0], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 1], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 2], src=tet_alphas, reduce=reduce_type)
-        vertex_alpha.scatter_reduce_(dim=0, index=indices[..., 3], src=tet_alphas, reduce=reduce_type)
-        return vertex_alpha
-
-    def calc_tet_area(self):
-        verts = self.vertices
-        v0, v1, v2, v3 = verts[self.indices].unbind(dim=1)
-        mat = torch.stack([v1-v0, v2-v0, v3-v0], dim=-1)
-        return torch.det(mat).abs() / 6.0
-
-    def calc_vert_density(self):
-        verts = self.vertices
-        vertex_density = torch.zeros((verts.shape[0],), device=self.device)
-        indices = self.indices.long()
-        for start in range(0, self.indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, self.indices.shape[0])
-            
-            _, _, density, _, _, _ = self.compute_batch_features(verts, self.indices)
-
-            density = density.reshape(-1)
-            indices_chunk = indices[start:end]
-            reduce_type = "amax"
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 0], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 1], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 2], src=density, reduce=reduce_type)
-            vertex_density.scatter_reduce_(dim=0, index=indices_chunk[..., 3], src=density, reduce=reduce_type)
-        return vertex_density
-
-    def calc_tet_alpha(self, mode="min"):
-        alpha_list = []
-        start = 0
-        
-        verts = self.vertices
-        inds = self.indices
-        v0, v1, v2, v3 = verts[inds[:, 0]], verts[inds[:, 1]], verts[inds[:, 2]], verts[inds[:, 3]]
-        
-        edge_lengths = torch.stack([
-            torch.norm(v0 - v1, dim=1), torch.norm(v0 - v2, dim=1), torch.norm(v0 - v3, dim=1),
-            torch.norm(v1 - v2, dim=1), torch.norm(v1 - v3, dim=1), torch.norm(v2 - v3, dim=1)
-        ], dim=0)
-        if mode == "min":
-            el = edge_lengths.min(dim=0)[0]
-        elif mode == "max":
-            el = edge_lengths.max(dim=0)[0]
-        elif mode == "mean":
-            el = edge_lengths.mean(dim=0)
-        else:
-            raise ValueError(f"Unknown mode: {mode}. Use 'min', 'max', or 'mean'.")
-        
-        # Compute the maximum possible alpha using the largest edge length
-        alpha = 1 - torch.exp(-self.density.reshape(-1) * el.reshape(-1))
-        return alpha
-
-    def tet_variability(self):
-        vertices = self.vertices
-        indices = self.indices
-        tet_var = torch.zeros((indices.shape[0]), device=vertices.device)
-        for start in range(0, indices.shape[0], self.chunk_size):
-            end = min(start + self.chunk_size, indices.shape[0])
-
-            circumcenters, _, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
-            vcolors = compute_vertex_colors_from_field(
-                vertices[indices[start:end]].detach(), rgb.float(), grd.float(),
-                circumcenters.float().detach())
-            vcolors = torch.nn.functional.softplus(vcolors, beta=10)
-            tet_var[start:end] = vcolors.std(dim=1).mean(dim=1)
-            # tet_var[start:end] = torch.linalg.norm(clipped_gradients, dim=-1).mean(dim=-1)
-        return tet_var
 
     def calc_tet_density(self):
         densities = []
         verts = self.vertices
         _, _, densities, _, _, _ = self.compute_batch_features(verts, self.indices)
         return densities.reshape(-1)
-
-    @torch.no_grad
-    def extract_mesh(self, path, density_threshold=0.5, alpha_threshold=0.2):
-        path.mkdir(exist_ok=True, parents=True)
-        verts = self.vertices
-        tet_density = self.calc_tet_density()
-        tet_alpha = self.calc_tet_alpha(mode="min")
-        mask = (tet_density > density_threshold) | (tet_alpha > alpha_threshold)
-        # # mask = tet_density > density_threshold
-        # density_contrast = max_density_contrast(verts, self.indices, tet_density, mode="ratio")
-        # mask = (density_contrast > density_threshold) & (tet_density > 0.5)
-
-
-        rgb = self.rgb[mask].detach()
-        tets = verts[self.indices[mask]]
-        circumcenters, radius = calculate_circumcenters_torch(tets.double())
-        grd = self.gradient[mask].detach()
-        grd = grd.reshape(-1, 1, 3) * rgb.reshape(-1, 3, 1).mean(dim=1, keepdim=True).detach()
-        ic(rgb.shape, grd.shape, radius.shape)
-        normed_grd = safe_div(grd, radius.reshape(-1, 1, 1))
-        vcolors = compute_vertex_colors_from_field(
-            tets.detach(), rgb.reshape(-1, 3), normed_grd.float(), circumcenters.float().detach())
-        vcolors = torch.nn.functional.softplus(vcolors, beta=10)
-
-        meshes = mesh_util.extract_meshes(
-            vcolors.detach().cpu().numpy(),
-            verts.detach().cpu().numpy(),
-            self.indices[mask].cpu().numpy())
-        for i, mesh in enumerate(meshes):
-            F = mesh['face']['vertex_indices'].shape[0]
-            if F > 1000:
-                mpath = path / f"{i}.ply"
-                print(f"Saving #F:{F} to {mpath}")
-                tinyplypy.write_ply(str(mpath), mesh, is_binary=False)
 
 
 # =============================================================================

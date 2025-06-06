@@ -33,7 +33,7 @@ def gaussian_blur(img: torch.Tensor,
 
 def render_err(gt_image, camera: Camera, model, tile_size=16,
                scene_scaling=1, min_t=0.1, lambda_ssim=0.2, 
-               density_t=1, **kwargs):
+               **kwargs):
     device = model.device
     indices = model.indices
     vertices = model.vertices
@@ -180,7 +180,7 @@ def render_err(gt_image, camera: Camera, model, tile_size=16,
         K=K,
         cam_pos=cam_pos,
         scene_scaling=scene_scaling,
-        density_t=density_t,
+        density_t=0,
         min_t=min_t,
         fovy=fovy,
         fovx=fovx,
