@@ -95,6 +95,7 @@ args.spike_duration = 350
 
 args.k_samples = 1
 args.trunc_sigma = 0.3
+args.percent_alpha = 0.02
 
 args.g_init=1.0
 args.s_init=1e-4
@@ -135,8 +136,10 @@ args.budget = 2_000_000
 args.clone_velocity = 0.1
 args.speed_mul = 100
 args.clone_min_alpha = 0.05
-args.percent_split = 1.0
+args.percent_within = 0.0
+args.percent_total = 1.0
 args.diff_threshold = 0.0
+args.midpoint = 2000
 
 args.lambda_ssim = 0.2
 args.base_min_t = 0.2
@@ -153,7 +156,7 @@ args.bilateral_grid_shape = [16, 16, 8]
 args.bilateral_grid_lr = 0.003
 args.lambda_tv_grid = 0.0
 
-args.checkpoint_iterations = [13999]
+args.checkpoint_iterations = []
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
@@ -241,10 +244,12 @@ def densify_schedule(start: int,
     iters[-1] = end
     return list(np.unique(iters))
 
-dschedule = densify_schedule(args.densify_start,
-                            args.densify_end,
-                            N,
-                            mode="linear")
+# dschedule = densify_schedule(args.densify_start,
+#                             args.densify_end,
+#                             N,
+#                             mode="linear")
+dschedule = list(range(args.densify_start, args.densify_end, args.densify_interval))
+dschedule = list(range(args.densify_start, args.midpoint, 50)) + list(range(args.midpoint, args.densify_end, args.densify_interval))
 targets = [target_num((i - args.densify_start) / num_densify_iter * N+1) for i in dschedule]
 fig = tpl.figure()
 fig.plot(dschedule, targets, width=100, height=20)
@@ -391,7 +396,9 @@ for iteration in progress_bar:
         with torch.no_grad():
             sampled_cams = [train_cameras[i] for i in densification_sampler.nextids()]
 
+            model.eval()
             stats = collect_render_stats(sampled_cams, model, args, device)
+            model.train()
             target_addition = targets[dschedule.index(iteration)] - model.vertices.shape[0]
 
             apply_densification(

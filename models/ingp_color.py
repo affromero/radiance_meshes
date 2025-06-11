@@ -57,6 +57,7 @@ class Model(BaseModel):
         self.chunk_size = 408576
         self.mask_values = True
         self.frozen = False
+        self.alpha = 0
 
         self.register_buffer('ext_vertices', ext_vertices.to(self.device))
         self.register_buffer('center', center.reshape(1, 3))
@@ -165,6 +166,8 @@ class Model(BaseModel):
             circumcenter, radius = calculate_circumcenters_torch(tets.double())
         else:
             circumcenter = circumcenters[start:end]
+        if self.training:
+            circumcenter += self.alpha*torch.rand_like(circumcenter)
         normalized = (circumcenter - self.center) / self.scene_scaling
         radius = torch.linalg.norm(circumcenter - vertices[indices[start:end, 0]], dim=-1)
         cv, cr = contract_mean_std(normalized, radius / self.scene_scaling)
@@ -290,10 +293,12 @@ class TetOptimizer:
                  sh_interval: int = 1000,
                  lambda_tv: float = 0.0,
                  lambda_density: float = 0.0,
+
                  spike_duration: int = 20,
                  densify_start: int = 2500,
                  densify_interval: int = 500,
                  densify_end: int = 15000,
+                 midpoint: int = 2000,
 
                  density_lr:  float = 1e-3,
                  color_lr:    float = 1e-3,
@@ -301,6 +306,7 @@ class TetOptimizer:
                  sh_lr:       float = 1e-3,
 
                  lambda_dist: float = 1e-5,
+                 percent_alpha: float = 0.02,
                  dist_delay: int = 2000,
 
                  **kwargs):
@@ -334,6 +340,12 @@ class TetOptimizer:
         self.vertex_grad = None
         self.split_std = split_std
 
+        self.alpha_sched = get_expon_lr_func(lr_init=percent_alpha*float(model.scene_scaling.cpu()),
+                                                lr_final=1e-20,
+                                                lr_delay_mult=1e-8,
+                                                lr_delay_steps=0,
+                                                max_steps=max_steps//3)
+
         base_net_scheduler = get_expon_lr_func(lr_init=network_lr,
                                                 lr_final=final_network_lr,
                                                 lr_delay_mult=1e-8,
@@ -342,7 +354,7 @@ class TetOptimizer:
 
         self.net_scheduler_args = SpikingLR(
             spike_duration, max_steps, base_net_scheduler,
-            densify_start, densify_interval, densify_end,
+            midpoint, densify_interval, densify_end,
             network_lr, network_lr)
             # network_lr, final_network_lr)
 
@@ -354,7 +366,7 @@ class TetOptimizer:
 
         self.encoder_scheduler_args = SpikingLR(
             spike_duration, max_steps, base_encoder_scheduler,
-            densify_start, densify_interval, densify_end,
+            midpoint, densify_interval, densify_end,
             encoding_lr, encoding_lr)
             # encoding_lr, final_encoding_lr)
 
@@ -365,16 +377,18 @@ class TetOptimizer:
                                                 max_steps=max_steps,
                                                 lr_delay_steps=vert_lr_delay)
 
-        # self.vertex_scheduler_args = SpikingLR(
-        #     spike_duration, max_steps, base_vertex_scheduler,
-        #     densify_start, densify_interval, densify_end,
-        #     self.vertex_lr, self.vert_lr_multi*final_vertices_lr)
         self.vertex_scheduler_args = base_vertex_scheduler
+        self.vertex_scheduler_args = SpikingLR(
+            spike_duration, max_steps, base_vertex_scheduler,
+            midpoint, densify_interval, densify_end,
+            # self.vertex_lr, self.vert_lr_multi*final_vertices_lr)
+            self.vertex_lr, self.vertex_lr)
         self.iteration = 0
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
         self.iteration = iteration
+        self.model.alpha = self.alpha_sched(iteration)
         for param_group in self.net_optim.param_groups:
             ratio = self.ratios[param_group["name"]]
             lr = self.net_scheduler_args(iteration)

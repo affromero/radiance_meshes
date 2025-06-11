@@ -377,7 +377,7 @@ void bwd_alpha_blend(TensorView<int32_t> sorted_gauss_idx,
                     bwd_diff(update_alpha_out)(dp_ao, dp_tetra_ctrl, d_ao);
                     d_ao = dp_ao.getDifferential();
                     float midpt = tetra_ctrl.dist.x;
-                    float grad_scale = min(1, midpt*midpt);// / scene_scaling / scene_scaling);
+                    float grad_scale = 1;//min(1, midpt*midpt);// / scene_scaling / scene_scaling);
                     //float grad_scale = midpt*midpt / scene_scaling / scene_scaling;
                     CtrlPt.Differential d_tetra_scale = {
                         grad_scale * dp_tetra_ctrl.d.rgba,
@@ -564,7 +564,7 @@ VarInfo kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     AlphaOut new_ao = update_alpha_out(ao, tetra_ctrl);
 
                     // calc grad scale to remove floaters
-                    float grad_scale = min(1, tetra_ctrl.dist.x*tetra_ctrl.dist.x);// / scene_scaling / scene_scaling);
+                    float grad_scale = 1;//min(1, tetra_ctrl.dist.x*tetra_ctrl.dist.x);// / scene_scaling / scene_scaling);
 
                     float T = grad_scale * ao.rgba.a * tetra_ctrl.rgba.a;
                     // float T = grad_scale * tetra_ctrl.rgba.a;
@@ -582,7 +582,7 @@ VarInfo kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     tet_err.InterlockedAdd(uint2(g_idx, 3), T, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 4), 1 * mismatch, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 5), 1 * mismatch * mismatch, old_val);
-                    float3 centroid = tetra_ctrl.dist.x * ray.d + ray.o;
+                    float3 centroid = 0.5*(tetra_ctrl.dist.x+tetra_ctrl.dist.y) * ray.d + ray.o;
                     tet_err.InterlockedAdd(uint2(g_idx, 13), T * centroid.x, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 14), T * centroid.y, old_val);
                     tet_err.InterlockedAdd(uint2(g_idx, 15), T * centroid.z, old_val);
