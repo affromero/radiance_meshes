@@ -151,6 +151,7 @@ def load_dataset(source_path, images_folder, data_device, eval, white_background
     transformed_pcd = scene_info.point_cloud._replace(points=xyz_transformed_hom[:, :3])
     scene_info = scene_info._replace(
         point_cloud=transformed_pcd,
+        transform=pca_transform,
     )
 
 

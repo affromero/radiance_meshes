@@ -54,7 +54,7 @@ class Model(BaseModel):
         ], device=self.device)
         sh_dim = ((1+max_sh_deg)**2-1)*3
         self.backbone = torch.compile(iNGPDW(sh_dim, **kwargs)).to(self.device)
-        self.chunk_size = 408576
+        self.chunk_size = 308576
         self.mask_values = True
         self.frozen = False
         self.alpha = 0

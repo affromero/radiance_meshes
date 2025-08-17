@@ -162,6 +162,7 @@ args.output_path.mkdir(exist_ok=True, parents=True)
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval)
 
+np.savetxt(str(args.output_path / "transform.txt"), scene_info.transform)
 
 args.num_samples = min(len(train_cameras), args.num_samples)
 
@@ -379,18 +380,17 @@ for iteration in progress_bar:
     if do_sh_up:
         model.sh_up()
 
-    with torch.no_grad():
-        if iteration % 10 == 0:
-            render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
-            sample_image = render_pkg['render']
-            sample_image = sample_image.permute(1, 2, 0)
-            sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
-            sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
-            video_writer.write(pad_image2even(sample_image))
-
     if do_cloning and not model.frozen:
         with torch.no_grad():
             sampled_cams = [train_cameras[i] for i in densification_sampler.nextids()]
+
+            with torch.no_grad():
+                render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
+                sample_image = render_pkg['render']
+                sample_image = sample_image.permute(1, 2, 0)
+                sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
+                sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
+                # video_writer.write(pad_image2even(sample_image))
 
             model.eval()
             stats = collect_render_stats(sampled_cams, model, args, device)

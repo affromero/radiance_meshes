@@ -40,4 +40,5 @@ class SceneInfo(NamedTuple):
     train_cameras: list
     test_cameras: list
     nerf_normalization: dict
+    transform: np.array
     ply_path: str
