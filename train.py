@@ -18,7 +18,8 @@ import numpy as np
 from utils import cam_util
 from utils.train_util import *
 # from models.vertex_color import Model, TetOptimizer
-from models.ingp_color import Model, TetOptimizer
+# from models.ingp_color import Model, TetOptimizer
+from models.ingp_density import Model, TetOptimizer
 # from models.ingp_linear import Model, TetOptimizer
 from models.frozen import freeze_model
 from fused_ssim import fused_ssim
@@ -292,7 +293,6 @@ if args.use_bilateral_grid:
 video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*'avc1'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
 
-tet_optim.build_tv()
 progress_bar = tqdm(range(args.iterations))
 torch.cuda.empty_cache()
 for iteration in progress_bar:

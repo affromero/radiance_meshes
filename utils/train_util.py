@@ -142,27 +142,32 @@ def render(camera: Camera, model, cell_values=None, tile_size=16, min_t=0.1,
     if cell_values is None:
         cell_values = torch.zeros((mask.shape[0], model.feature_dim), device=circumcenter.device)
         if mask.sum() > 0 and model.mask_values:
-            normed_cc, cell_values[mask] = model.get_cell_values(camera, mask, circumcenter[mask])
+            vertex_color, cell_values[mask] = model.get_cell_values(camera, mask, circumcenter[mask])
         else:
-            normed_cc, cell_values = model.get_cell_values(camera, all_circumcenters=circumcenter)
-        if clip_multi > 0 and not model.frozen:
-            with torch.no_grad():
-                tet_sens, sensitivity = topo_utils.compute_vertex_sensitivity(model.indices[mask],
-                                                                            vertices, normed_cc, True)
-                                                                            # vertices, normed_cc, model.contract_vertices)
-                scaling = clip_multi*sensitivity.reshape(-1, 1).clip(min=1e-5)
-            vertices = ClippedGradients.apply(vertices, scaling)
+            vertex_color, cell_values = model.get_cell_values(camera, all_circumcenters=circumcenter)
 
     mod = LinearRender if model.linear else Render
-    image_rgb, distortion_img, tet_alive = mod.apply(
-        sorted_tetra_idx,
-        tile_ranges,
-        model.indices,
-        vertices,
-        cell_values,
-        render_grid,
-        tcam,
-        ray_jitter)
+    if model.linear:
+        image_rgb, distortion_img, tet_alive = LinearRender.apply(
+            sorted_tetra_idx,
+            tile_ranges,
+            model.indices,
+            vertices,
+            vertex_color,
+            cell_values,
+            render_grid,
+            tcam,
+            ray_jitter)
+    else:
+        image_rgb, distortion_img, tet_alive = Render.apply(
+            sorted_tetra_idx,
+            tile_ranges,
+            model.indices,
+            vertices,
+            cell_values,
+            render_grid,
+            tcam,
+            ray_jitter)
     alpha = image_rgb.permute(2,0,1)[3, ...]
     total_density = (distortion_img[:, :, 2]**2).clip(min=1e-6)
     distortion_loss = (((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4]) / total_density).clip(min=0)

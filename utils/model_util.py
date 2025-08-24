@@ -238,3 +238,70 @@ class iNGPDW(nn.Module):
             grd = grd * 0
         # grd = rgb * torch.tanh(field_samples.reshape(-1, 3, 3))  # shape (T, 3, 3)
         return density, rgb.reshape(-1, 3), grd, sh
+
+class iNGPD(nn.Module):
+    def __init__(self, 
+                 scale_multi=0.5,
+                 log2_hashmap_size=16,
+                 base_resolution=16,
+                 per_level_scale=2,
+                 L=10,
+                 hashmap_dim=4,
+                 hidden_dim=64,
+                 g_init=1,
+                 s_init=1e-4,
+                 d_init=0.1,
+                 c_init=0.6,
+                 density_offset=-4,
+                 ablate_gradient=False,
+                 **kwargs):
+        super().__init__()
+        self.scale_multi = scale_multi
+        self.L = L
+        self.dim = hashmap_dim
+        self.per_level_scale = per_level_scale
+        self.base_resolution = base_resolution
+        self.density_offset = density_offset
+        self.ablate_gradient = ablate_gradient
+
+        self.encoding = hashgrid.HashEmbedderOptimized(
+            [torch.zeros((3)), torch.ones((3))],
+            self.L, n_features_per_level=self.dim,
+            log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
+            finest_resolution=base_resolution*per_level_scale**self.L)
+
+        def mk_head(n):
+            network = nn.Sequential(
+                nn.Linear(self.encoding.n_output_dims, hidden_dim),
+                nn.SELU(inplace=True),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.SELU(inplace=True),
+                nn.Linear(hidden_dim, n)
+            )
+            gain = nn.init.calculate_gain('relu')  # for example, if using ReLU activations
+            network.apply(lambda m: init_linear(m, gain))
+            return network
+
+        self.density_net   = mk_head(1)
+
+    def _encode(self, x: torch.Tensor, cr: torch.Tensor):
+        x = x.detach()
+        output = self.encoding(x).float()
+        output = output.reshape(-1, self.dim, self.L)
+        cr = cr.float().detach() * self.scale_multi
+        n = torch.arange(self.L, device=x.device).reshape(1, 1, -1)
+        erf_x = safe_div(torch.tensor(1.0, device=x.device),
+                         safe_sqrt(self.per_level_scale * 4*n*cr.reshape(-1, 1, 1)))
+        scaling = torch.erf(erf_x)
+        output = output * scaling
+        return output
+
+
+    def forward(self, x, cr):
+        output = self._encode(x, cr)
+
+        h = output.reshape(-1, self.L * self.dim)
+
+        sigma = self.density_net(h)
+        density = safe_exp(sigma+self.density_offset)
+        return density

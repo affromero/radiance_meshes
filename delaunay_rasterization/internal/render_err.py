@@ -81,7 +81,7 @@ def render_err(gt_image, camera: Camera, model, tile_size=16,
     tet_alive = torch.zeros((indices.shape[0]), dtype=bool, device=device)
     ray_jitter = 0.5*torch.ones((camera.image_height, camera.image_width, 2), device=device)
 
-    mod = slang_modules.alpha_blend_shaders_linear if model.linear else slang_modules.alpha_blend_shaders_interp
+    mod = slang_modules.alpha_blend_shaders_linear if vertex_color is not None else slang_modules.alpha_blend_shaders_interp
     assert (render_grid.tile_height, render_grid.tile_width) in mod, (
         'Alpha Blend Shader was not compiled for this tile'
         f' {render_grid.tile_height}x{render_grid.tile_width} configuration, available configurations:'
@@ -90,17 +90,23 @@ def render_err(gt_image, camera: Camera, model, tile_size=16,
 
     shader = mod[(render_grid.tile_height, render_grid.tile_width)]
     st = time.time()
-    splat_kernel_with_args = shader.splat_tiled(
+    args = dict(
         sorted_gauss_idx=sorted_tetra_idx,
         tile_ranges=tile_ranges,
         indices=indices,
         vertices=vertices,
         tet_density=cell_values,
         output_img=output_img,
-        distortion_img=distortion_img,
         n_contributors=n_contributors,
-        tet_alive=tet_alive,
         tcam=tcam,
+    )
+    if vertex_color is not None:
+        args['vertex_color'] = vertex_color
+
+    splat_kernel_with_args = shader.splat_tiled(
+        **args,
+        distortion_img=distortion_img,
+        tet_alive=tet_alive,
         ray_jitter=ray_jitter,
     )
     splat_kernel_with_args.launchRaw(
@@ -127,20 +133,13 @@ def render_err(gt_image, camera: Camera, model, tile_size=16,
                                 device=device)
 
     shader.calc_tet_err(
-        sorted_gauss_idx=sorted_tetra_idx,
-        tile_ranges=tile_ranges,
-        indices=indices,
-        vertices=vertices,
-        tet_density=cell_values,
-        output_img=output_img,
+        **args,
         pixel_err=pixel_err,
         ssim_err=ssim_err,
         debug_img=debug_img,
         gt=gt_image.permute(1, 2, 0).contiguous(),
         tet_err=tet_err,
         tet_count=tet_count,
-        n_contributors=n_contributors,
-        tcam=tcam,
     ).launchRaw(
         blockSize=(render_grid.tile_width, 
                     render_grid.tile_height, 1),

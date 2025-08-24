@@ -57,9 +57,9 @@ class Model(BaseModel):
         self.chunk_size = 308576
         self.mask_values = True
         self.frozen = False
-        self.alpha = 0
         self.linear = False
         self.feature_dim = 7
+        self.alpha = 0
         self.ablate_circumsphere = ablate_circumsphere
 
         self.register_buffer('ext_vertices', ext_vertices.to(self.device))
@@ -108,7 +108,7 @@ class Model(BaseModel):
             outputs.append(dvrgbs)
         features = torch.cat(outputs, dim=0)
         normed_cc = torch.cat(normed_cc, dim=0)
-        return normed_cc, features
+        return None, features
 
     @staticmethod
     def init_from_pcd(point_cloud, cameras, device, max_sh_deg,

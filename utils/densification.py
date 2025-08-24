@@ -320,24 +320,24 @@ def apply_densification(
                     **args.as_dict())
 
     # ---------- velocity-based additions -------------------------------------
-    raw_verts = model.contracted_vertices
-    vstate = tet_optim.vertex_optim.get_state_by_name("contracted_vertices")
-    velocity = vstate["exp_avg"] * args.speed_mul
-
-    if model.contract_vertices:
-        J_d = topo_utils.contraction_jacobian_d_in_chunks(
-            model.vertices[:raw_verts.shape[0]]).view(-1, 1)
-        speed = torch.linalg.norm(velocity * J_d, dim=1)
-    else:
-        speed = torch.linalg.norm(velocity, dim=1)
-        
-    if args.clone_velocity > 0:
-        new_verts = (raw_verts + velocity)[speed > args.clone_velocity]
-        tet_optim.add_points(new_verts, raw_verts=True)
-        num_cloned = new_verts.shape[0]
-    else:
-        num_cloned = 0
-
+    # raw_verts = model.contracted_vertices
+    # vstate = tet_optim.vertex_optim.get_state_by_name("contracted_vertices")
+    # velocity = vstate["exp_avg"] * args.speed_mul
+    #
+    # if model.contract_vertices:
+    #     J_d = topo_utils.contraction_jacobian_d_in_chunks(
+    #         model.vertices[:raw_verts.shape[0]]).view(-1, 1)
+    #     speed = torch.linalg.norm(velocity * J_d, dim=1)
+    # else:
+    #     speed = torch.linalg.norm(velocity, dim=1)
+    #     
+    # if args.clone_velocity > 0:
+    #     new_verts = (raw_verts + velocity)[speed > args.clone_velocity]
+    #     tet_optim.add_points(new_verts, raw_verts=True)
+    #     num_cloned = new_verts.shape[0]
+    # else:
+    #     num_cloned = 0
+    #
     # ---------- housekeeping --------------------------------------------------
     gc.collect()
     torch.cuda.empty_cache()
@@ -346,5 +346,5 @@ def apply_densification(
         f"#Grow: {grow_mask.sum():4d} #Split: {split_mask.sum():4d} | "
         f"T_Total: {target_total:4d} T_Within: {target_within:4d} T_Between: {target_between:4d} | "
         f"Total Avg: {total_var.mean():.4f} Within Avg: {within_var.mean():.4f} Between Avg: {between_var.mean():.4f}  | "
-        f"By Vel: {num_cloned}"
+        # f"By Vel: {num_cloned}"
     )
