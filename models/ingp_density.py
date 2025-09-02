@@ -6,7 +6,7 @@ from utils import optim
 from gdel3d import Del
 from torch import nn
 from icecream import ic
-from utils.safe_math import safe_exp, safe_div, safe_sqrt, safe_pow, safe_cos, safe_sin, remove_zero, safe_arctan2
+from utils.safe_math import safe_div, safe_sqrt, safe_pow, safe_cos, safe_sin, remove_zero, safe_arctan2
 from utils.contraction import contract_mean_std
 from utils.contraction import contract_points, inv_contract_points
 from utils.train_util import get_expon_lr_func
@@ -23,6 +23,7 @@ import tinyplypy
 from utils.phong_shading import compute_vert_color
 from utils.model_util import RGB2SH, iNGPD
 from sh_slang.eval_sh import eval_sh
+from scipy.spatial import  Delaunay, ConvexHull
 
 def init_weights(m, gain):
     if isinstance(m, nn.Linear):
@@ -212,12 +213,17 @@ class Model(nn.Module):
         # ic(center1, center, scaling1, scaling)
 
         vertices = vertices + torch.randn(*vertices.shape) * 1e-3
-        v = Del(vertices.shape[0])
-        indices_np, prev = v.compute(vertices.detach().cpu())
-        indices_np = indices_np.numpy()
-        indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
-        vertices = vertices[indices_np].mean(dim=1)
-        vertices = vertices + torch.randn(*vertices.shape) * 1e-3
+        num_ext = 1000
+        pcd_scaling = torch.linalg.norm(vertices - center.cpu().reshape(1, 3), dim=1, ord=2).max()
+        new_radius = pcd_scaling.cpu().item()
+        ext_vertices = topo_utils.fibonacci_spiral_on_sphere(num_ext, new_radius, device='cpu') + center.reshape(1, 3).cpu()
+        vertices = torch.cat([vertices, ext_vertices], dim=0)
+        # v = Del(vertices.shape[0])
+        # indices_np, prev = v.compute(vertices.detach().cpu())
+        # indices_np = indices_np.numpy()
+        # indices_np = indices_np[(indices_np < vertices.shape[0]).all(axis=1)]
+        # vertices = vertices[indices_np].mean(dim=1)
+        # vertices = vertices + torch.randn(*vertices.shape) * 1e-3
 
         # repeats = 3
         # vertices = vertices.reshape(-1, 1, 3).expand(-1, repeats, 3)
@@ -289,13 +295,12 @@ class Model(nn.Module):
         indices = self.indices[mask] if mask is not None else self.indices
         vertices = self.vertices
 
-        densities = torch.empty((indices.shape[0]), device=self.device)
+        densities = torch.empty((indices.shape[0], 1), device=self.device)
         # densities = []
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
             output = self.compute_batch_features(vertices, indices, start, end)
-            density = safe_exp(output[:, 0]+self.density_offset)
-            densities[start:end] = density
+            densities[start:end] = output
 
         vertex_color_raw = eval_sh(
             vertices,
@@ -343,12 +348,12 @@ class TetOptimizer:
                  model: Model,
                  encoding_lr: float=1e-2,
                  final_encoding_lr: float=1e-2,
-                 color_lr: float=1e-2,
-                 final_color_lr: float=1e-2,  # <-- Add final LR for base color
+                 color_lr: float=1e-1,
+                 final_color_lr: float=1e-3,  # <-- Add final LR for base color
                  network_lr: float=1e-3,
                  final_network_lr: float=1e-3,
-                 shs_lr: float=1e-4,
-                 final_shs_lr: float=1e-4,  # <-- Add final LR for shs
+                 shs_lr: float=1e-3,
+                 final_shs_lr: float=1e-5,
                  vertices_lr: float=4e-4,
                  final_vertices_lr: float=4e-7,
                  vertices_lr_delay_multi: float=0.01,
@@ -357,6 +362,7 @@ class TetOptimizer:
                  net_weight_decay=1e-3,
                  split_std: float = 0.5,
                  vertices_beta: List[float] = [0.9, 0.99],
+                 freeze_start: int = 30000,
                  lr_delay: int = 500,
                  **kwargs):
         self.weight_decay = weight_decay
@@ -386,30 +392,30 @@ class TetOptimizer:
                                                 lr_final=final_network_lr,
                                                 lr_delay_mult=1e-8,
                                                 lr_delay_steps=lr_delay,
-                                                max_steps=10000)
+                                                max_steps=freeze_start)
         self.encoder_scheduler_args = get_expon_lr_func(lr_init=encoding_lr,
                                                 lr_final=final_encoding_lr,
                                                 lr_delay_mult=1e-8,
                                                 lr_delay_steps=lr_delay,
-                                                max_steps=10000)
+                                                max_steps=freeze_start)
         self.vertex_scheduler_args = get_expon_lr_func(lr_init=self.vert_lr_multi*vertices_lr,
                                                 lr_final=self.vert_lr_multi*final_vertices_lr,
                                                 lr_delay_mult=vertices_lr_delay_multi,
-                                                max_steps=10000,
+                                                max_steps=freeze_start,
                                                 lr_delay_steps=lr_delay)
         self.color_scheduler_args = get_expon_lr_func(
             lr_init=color_lr,
             lr_final=final_color_lr,
             # lr_delay_mult=1e-8,
             lr_delay_steps=0,
-            max_steps=10000
+            max_steps=freeze_start
         )
         self.shs_scheduler_args = get_expon_lr_func(
             lr_init=shs_lr,
             lr_final=final_shs_lr,
             # lr_delay_mult=1e-8,
             lr_delay_steps=0,
-            max_steps=10000
+            max_steps=freeze_start
         )
 
     def update_learning_rate(self, iteration):
@@ -472,7 +478,6 @@ class TetOptimizer:
             barycentric_weights = topo_utils.calc_barycentric(split_point, tets).clip(min=0)
             barycentric_weights = barycentric_weights / (1e-3+barycentric_weights.sum(dim=1, keepdim=True))
 
-            print(barycentric_weights.shape)
             barycentric_weights = barycentric_weights.reshape(-1, 4, 1)
             new_vertex_base_color = (self.model.vertex_base_color[clone_indices] * barycentric_weights).sum(dim=1)
             new_vertex_shs = (self.model.vertex_shs[clone_indices] * barycentric_weights).sum(dim=1)

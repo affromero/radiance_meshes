@@ -20,8 +20,7 @@ from pathlib import Path
 import numpy as np
 from utils.args import Args
 import tinyplypy
-from scipy.spatial import ConvexHull
-from scipy.spatial import  Delaunay
+from scipy.spatial import  Delaunay, ConvexHull
 import open3d as o3d
 from data.types import BasicPointCloud
 from utils import mesh_util

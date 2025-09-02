@@ -34,7 +34,7 @@ def vertex_and_tile_shader(indices,
     # ic((vs_tetra[:, 1] == 1).sum())
 
     with torch.no_grad():
-        index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)
+        index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)#.clip(max=2<<30-1)
         total_size_index_buffer = index_buffer_offset[-1]
         unsorted_keys = torch.zeros((total_size_index_buffer,), 
                                     device="cuda", 
@@ -77,6 +77,8 @@ class VertexShader(torch.autograd.Function):
     def forward(ctx, indices, vertices, tcam, render_grid, device="cuda"):
         assert not torch.isnan(vertices).any(), "Tensor contains NaN values!"
         n_tetra = indices.shape[0]
+        indices = indices.contiguous()
+        vertices = vertices.contiguous()
         tiles_touched = torch.zeros((n_tetra), 
                                     device="cuda", 
                                     dtype=torch.int32)

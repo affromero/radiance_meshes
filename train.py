@@ -18,10 +18,10 @@ import numpy as np
 from utils import cam_util
 from utils.train_util import *
 # from models.vertex_color import Model, TetOptimizer
-# from models.ingp_color import Model, TetOptimizer
-from models.ingp_density import Model, TetOptimizer
-# from models.ingp_linear import Model, TetOptimizer
+from models.ingp_color import Model, TetOptimizer
 from models.frozen import freeze_model
+# from models.ingp_density import Model, TetOptimizer
+# from models.frozen_vertices import freeze_model
 from fused_ssim import fused_ssim
 from pathlib import Path, PosixPath
 from utils.args import Args
@@ -65,7 +65,7 @@ args = Args()
 args.tile_size = 4
 args.image_folder = "images_4"
 args.eval = False
-args.dataset_path = Path("/data/nerf_datasets/360/bicycle")
+args.dataset_path = Path("/optane/nerf_datasets/360/bicycle")
 args.output_path = Path("output/test/")
 args.iterations = 30000
 args.ckpt = ""
@@ -79,8 +79,8 @@ args.sh_step = 1
 # iNGP Settings
 args.encoding_lr = 3e-3
 args.final_encoding_lr = 3e-4
-args.network_lr = 1e-3
-args.final_network_lr = 1e-4
+args.network_lr = 5e-4
+args.final_network_lr = 5e-5
 args.hidden_dim = 64
 args.scale_multi = 0.35 # chosen such that 96% of the distribution is within the sphere 
 args.log2_hashmap_size = 22
@@ -112,6 +112,10 @@ args.delaunay_start = 30000
 args.freeze_start = 22500
 args.freeze_lr = 1e-3
 args.final_freeze_lr = 1e-4
+args.color_lr = 1e-1
+args.final_color_lr = 1e-2
+args.shs_lr = 1e-3
+args.final_shs_lr = 1e-5
 
 # Distortion Settings
 args.lambda_dist = 1e-4
@@ -290,7 +294,7 @@ if args.use_bilateral_grid:
     print("Bilateral Grid initialized successfully!\n")
 # ------------------------------------------------
 
-video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.CAP_FFMPEG, cv2.VideoWriter_fourcc(*'avc1'), 30,
+video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
 
 progress_bar = tqdm(range(args.iterations))
@@ -380,17 +384,18 @@ for iteration in progress_bar:
     if do_sh_up:
         model.sh_up()
 
+    if iteration % 10 == 0:
+        with torch.no_grad():
+            render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
+            sample_image = render_pkg['render']
+            sample_image = sample_image.permute(1, 2, 0)
+            sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
+            sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
+            video_writer.write(pad_image2even(sample_image))
+
     if do_cloning and not model.frozen:
         with torch.no_grad():
             sampled_cams = [train_cameras[i] for i in densification_sampler.nextids()]
-
-            with torch.no_grad():
-                render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
-                sample_image = render_pkg['render']
-                sample_image = sample_image.permute(1, 2, 0)
-                sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
-                sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
-                # video_writer.write(pad_image2even(sample_image))
 
             model.eval()
             stats = collect_render_stats(sampled_cams, model, args, device)
@@ -426,7 +431,7 @@ for iteration in progress_bar:
         with (checkpoint_dir / "config.json").open("w") as f:
             json.dump(args.as_dict(), f, cls=CustomEncoder)
 
-    psnr = 20 * math.log10(1.0 / math.sqrt(l2_loss.detach().cpu().item()))
+    psnr = -20 * math.log10(math.sqrt(l2_loss.detach().cpu().clip(min=1e-6).item()))
     psnrs[-1].append(psnr)
 
     disp_ind = max(len(psnrs)-2, 0)
