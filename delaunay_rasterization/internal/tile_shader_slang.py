@@ -31,10 +31,10 @@ def vertex_and_tile_shader(indices,
         vertices,
         cam,
         render_grid)
-    # ic((vs_tetra[:, 1] == 1).sum())
 
     with torch.no_grad():
-        index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)#.clip(max=2<<30-1)
+        index_buffer_offset = torch.cumsum(tiles_touched, dim=0, dtype=tiles_touched.dtype)
+        max_mask = (tiles_touched == cam['grid_width']*cam['grid_height'])
         total_size_index_buffer = index_buffer_offset[-1]
         unsorted_keys = torch.zeros((total_size_index_buffer,), 
                                     device="cuda", 
@@ -103,6 +103,14 @@ class VertexShader(torch.autograd.Function):
                 blockSize=(256, 1, 1),
                 gridSize=(ceil_div(n_tetra, 256), 1, 1)
         )
+
+        # inds, = torch.where(vs_tetra[:, 1] == 1)
+        # if len(inds) > 1:
+        #     j = vs_tetra[inds, 2].argmin()
+        #     mask = torch.tensor([ind for i, ind in enumerate(inds) if i != j], device=vs_tetra.device)
+        #     tiles_touched[mask] = 0
+        #     rect_tile_space[mask] = 0
+        #     vs_tetra[mask, 1] = 0
 
         tensors = [
             indices, vertices,
