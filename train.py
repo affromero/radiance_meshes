@@ -73,7 +73,7 @@ args.render_train = False
 
 # Light Settings
 args.max_sh_deg = 3
-args.sh_interval = 2000
+args.sh_interval = 0
 args.sh_step = 1
 
 # iNGP Settings
@@ -146,9 +146,9 @@ args.base_min_t = 0.2
 args.sample_cam = 8
 args.data_device = 'cpu'
 args.lambda_tv = 0.0
-args.density_threshold = 0.001
-args.alpha_threshold = 0.001
-args.contrib_threshold = 0.003
+args.density_threshold = 0.1
+args.alpha_threshold = 0.1
+args.contrib_threshold = 0.00
 
 args.ablate_gradient = False
 args.ablate_circumsphere = False
