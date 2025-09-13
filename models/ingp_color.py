@@ -339,9 +339,11 @@ class TetOptimizer:
         self.lambda_color = lambda_color
         self.lambda_tv = lambda_tv
         self.lambda_density = lambda_density
+
         self.optim = optim.CustomAdam([
             {"params": model.backbone.encoding.parameters(), "lr": encoding_lr, "name": "encoding"},
         ], ignore_param_list=["encoding", "network"], betas=[0.9, 0.999], eps=1e-15)
+
         self.net_optim = optim.CustomAdam([
             {"params": model.backbone.network.parameters(), "lr": network_lr, "name": "network"},
             {"params": model.backbone.density_net.parameters(),   "lr": network_lr,  "name": "density"},
@@ -349,6 +351,7 @@ class TetOptimizer:
             {"params": model.backbone.gradient_net.parameters(),  "lr": network_lr, "name": "gradient"},
             {"params": model.backbone.sh_net.parameters(),        "lr": network_lr,       "name": "sh"},
         ], ignore_param_list=[], betas=[0.9, 0.999])
+
         self.vert_lr_multi = 1 if model.contract_vertices else float(model.scene_scaling.cpu())
         self.vertex_optim = optim.CustomAdam([
             {"params": [model.contracted_vertices], "lr": self.vert_lr_multi*vertices_lr, "name": "contracted_vertices"},

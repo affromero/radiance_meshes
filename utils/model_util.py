@@ -175,26 +175,12 @@ class iNGPDW(nn.Module):
             network.apply(lambda m: init_linear(m, gain))
             return network
 
-        def mk_head_sh(n):
-            network = nn.Sequential(
-                nn.Linear(self.encoding.n_output_dims, 128),
-                nn.SELU(inplace=True),
-                nn.Linear(128, 128),
-                nn.SELU(inplace=True),
-                nn.Linear(128, 128),
-                nn.SELU(inplace=True),
-                nn.Linear(128, n)
-            )
-            gain = nn.init.calculate_gain('relu')  # for example, if using ReLU activations
-            network.apply(lambda m: init_linear(m, gain))
-            return network
-
         self.network = mk_head(1+12+sh_dim)
 
         self.density_net   = mk_head(1)
         self.color_net     = mk_head(3)
         self.gradient_net  = mk_head(3)
-        self.sh_net        = mk_head_sh(sh_dim)
+        self.sh_net        = mk_head(sh_dim)
 
         last = self.network[-1]
         with torch.no_grad():

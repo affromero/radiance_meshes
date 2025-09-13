@@ -73,7 +73,7 @@ args.render_train = False
 
 # Light Settings
 args.max_sh_deg = 3
-args.sh_interval = 1000
+args.sh_interval = 0
 args.sh_step = 1
 
 # iNGP Settings
@@ -86,6 +86,7 @@ args.scale_multi = 0.35 # chosen such that 96% of the distribution is within the
 args.log2_hashmap_size = 22
 args.per_level_scale = 2
 args.L = 10
+args.base_resolution = 16
 args.density_offset = -4
 args.weight_decay = 0.01
 args.hashmap_dim = 16
@@ -109,7 +110,7 @@ args.contract_vertices = False
 args.clip_multi = 0
 args.delaunay_start = 30000
 
-args.freeze_start = 22500
+args.freeze_start = 18000
 args.freeze_lr = 1e-3
 args.final_freeze_lr = 1e-4
 args.color_lr = 1e-1
@@ -148,7 +149,7 @@ args.data_device = 'cpu'
 args.lambda_tv = 0.0
 args.density_threshold = 0.1
 args.alpha_threshold = 0.1
-args.contrib_threshold = 0.01
+args.contrib_threshold = 0.0
 
 args.ablate_gradient = False
 args.ablate_circumsphere = False

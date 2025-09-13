@@ -272,7 +272,7 @@ class FrozenTetOptimizer:
         ])
         self.sh_optim = torch.optim.RMSprop([
             {"params": [model.sh],       "lr": freeze_lr,       "name": "sh"},
-        ], eps=1e-4)
+        ], eps=1e-6)
         self.freeze_start = freeze_start
         self.scheduler = get_expon_lr_func(lr_init=freeze_lr,
                                            lr_final=final_freeze_lr,
