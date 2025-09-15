@@ -155,7 +155,7 @@ class Model(BaseModel):
     def get_cell_values(self, camera: Camera, mask=None,
                         all_circumcenters=None, radii=None):
         indices = self.indices[mask] if mask is not None else self.indices
-        vertices = self.vertices
+        vertices = self.vertices.detach()
 
         features = torch.empty((indices.shape[0], self.feature_dim), device=self.device)
         start = 0
@@ -406,8 +406,13 @@ class TetOptimizer:
             # {"params": model.backbone.color_net.parameters(),     "lr": network_lr,    "name": "color"},
             {"params": model.backbone.density_color_net.parameters(),     "lr": network_lr,    "name": "color"},
             {"params": model.backbone.gradient_net.parameters(),  "lr": network_lr, "name": "gradient"},
-            {"params": model.backbone.sh_net.parameters(),        "lr": network_lr,       "name": "sh"},
+            {"params": model.backbone.sh_net.parameters(),        "lr": sh_lr,       "name": "sh"},
         ], ignore_param_list=[], betas=[0.9, 0.999], eps=1e-15)
+        self.ratios = {
+            "color": 1,
+            "sh": sh_lr / network_lr,
+            "gradient": 1
+        }
         self.vert_lr_multi = 1 if model.contract_vertices else float(model.scene_scaling.cpu())
         self.vertex_optim = optim.CustomAdam([
             {"params": [model.contracted_vertices], "lr": self.vert_lr_multi*vertices_lr, "name": "contracted_vertices"},
@@ -467,7 +472,7 @@ class TetOptimizer:
         self.iteration = iteration
         self.model.alpha = self.alpha_sched(iteration)
         for param_group in self.net_optim.param_groups:
-            lr = self.net_scheduler_args(iteration)
+            lr = self.ratios[param_group['name']] * self.net_scheduler_args(iteration)
             param_group['lr'] = lr
         for param_group in self.optim.param_groups:
             if param_group["name"] == "encoding":
