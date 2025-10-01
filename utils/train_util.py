@@ -62,7 +62,7 @@ def render(camera: Camera, model, cell_values=None, tile_size=16, min_t=0.1,
     distortion_loss = (((distortion_img[:, :, 0] - distortion_img[:, :, 1]) + distortion_img[:, :, 4]) / total_density).clip(min=0)
     
     render_pkg = {
-        'render': image_rgb.permute(2,0,1)[:3, ...],
+        'render': image_rgb.permute(2,0,1)[:3, ...] * camera.gt_alpha_mask.to(device),
         'alpha': alpha,
         'distortion_loss': distortion_loss.mean(),
         'mask': mask,

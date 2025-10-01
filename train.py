@@ -69,6 +69,7 @@ args.dataset_path = Path("/optane/nerf_datasets/360/bonsai")
 args.output_path = Path("output/test/")
 args.iterations = 26000
 args.ckpt = ""
+args.resolution = 1
 args.render_train = False
 
 # Light Settings
@@ -155,7 +156,7 @@ args.output_path.mkdir(exist_ok=True, parents=True)
 # args.checkpoint_iterations.append(args.freeze_start-1)
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
-    args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval)
+    args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval, resolution=args.resolution)
 
 np.savetxt(str(args.output_path / "transform.txt"), scene_info.transform)
 
@@ -321,6 +322,7 @@ for iteration in progress_bar:
     ind = inds.pop()
     camera = train_cameras[ind]
     target = camera.original_image.cuda()
+    gt_mask = camera.gt_alpha_mask.cuda()
 
     st = time.time()
     ray_jitter = torch.rand((camera.image_height, camera.image_width, 2), device=device)
@@ -342,9 +344,9 @@ for iteration in progress_bar:
         transformed = slice(bil_grids, coords, img_for_bil, img_ids)
         image = transformed["rgb"].reshape(h, w, 3).permute(2, 0, 1)
 
-    l1_loss = (target - image).abs().mean()
-    l2_loss = ((target - image)**2).mean()
-    reg = tet_optim.regularizer(render_pkg, **args.as_dict())
+    l1_loss = ((target - image).abs() * gt_mask).mean()
+    l2_loss = ((target - image)**2 * gt_mask).mean()
+    reg = tet_optim.regularizer(render_pkg)
     ssim_loss = (1-fused_ssim(image.unsqueeze(0), target.unsqueeze(0))).clip(min=0, max=1)
     dl_loss = render_pkg['distortion_loss']
     loss = (1-args.lambda_ssim)*l1_loss + \
