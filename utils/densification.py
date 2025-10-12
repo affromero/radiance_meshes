@@ -5,7 +5,7 @@ import imageio
 from utils import safe_math
 from typing import NamedTuple, List
 from delaunay_rasterization.internal.render_err import render_err
-
+from icecream import ic
 
 
 @torch.no_grad()
@@ -293,37 +293,39 @@ def apply_densification(
     keep_verts.scatter_reduce_(dim=0, index=indices[..., 2], src=mask_alive_i, reduce=reduce_type)
     keep_verts.scatter_reduce_(dim=0, index=indices[..., 3], src=mask_alive_i, reduce=reduce_type)
 
-    target_addition = min(target_addition, stats.tet_view_count.shape[0])
+    target_addition = int(min(target_addition, stats.tet_view_count.shape[0]))
     if target_addition < 0:
         return
 
     target_total = int(args.percent_total * target_addition)
     target_within = int(args.percent_within * target_addition)
 
-    grow_mask = torch.zeros_like(total_var, dtype=torch.bool)
-    within_mask = torch.zeros_like(grow_mask)
+    total_mask = torch.zeros_like(total_var, dtype=torch.bool)
+    within_mask = torch.zeros_like(total_mask)
 
     temp_total_score = total_var.clone()
     temp_within_score = within_var.clone()
 
-    if target_total > 0:
-        top_total = torch.topk(temp_total_score, target_total).indices
-        grow_mask[top_total] = temp_total_score[top_total] > 0
-        temp_within_score[grow_mask] = 0
+    # if target_total > 0:
+    #     top_total = torch.topk(temp_total_score, target_total).indices
+    #     ic(temp_total_score[top_total].min())
+    #     total_mask[top_total] = temp_total_score[top_total] > 0
+    #     temp_within_score[total_mask] = 0
 
-    if target_within > 0:
-        top_within = torch.topk(temp_within_score, target_within).indices
-        within_mask[top_within] = temp_within_score[top_within] > 0
+    # if target_within > 0:
+    #     top_within = torch.topk(temp_within_score, target_within).indices
+    #     ic(temp_within_score[top_within].min())
+    #     within_mask[top_within] = temp_within_score[top_within] > 0
     
-    clone_mask = within_mask | grow_mask
+    # clone_mask = within_mask | total_mask
 
     if args.output_path is not None:
 
-        f = mask_alive.float().unsqueeze(1).expand(-1, 4).clone()
-        color = torch.rand_like(f[:, :3])
-        # color = rgb + 0.5#torch.rand_like(f[:, :3])
-        f[:, :3] = color
-        f[:, 3] *= 2.0    # alpha
+        # f = mask_alive.float().unsqueeze(1).expand(-1, 4).clone()
+        # color = torch.rand_like(f[:, :3])
+        # # color = rgb + 0.5#torch.rand_like(f[:, :3])
+        # f[:, :3] = color
+        # f[:, 3] *= 2.0    # alpha
         # imageio.imwrite(args.output_path / f"alive_mask{iteration}.png",
         #                 render_debug(f, model, sample_cam, 10, tile_size=args.tile_size))
         # f = clone_mask.float().unsqueeze(1).expand(-1, 4).clone()
@@ -340,6 +342,16 @@ def apply_densification(
         imageio.imwrite(args.output_path / f"im{iteration}.png",
                         cv2.cvtColor(sample_image, cv2.COLOR_BGR2RGB))
 
+    within_mask = (within_var > args.within_thresh)
+    total_mask = (total_var > args.total_thresh)
+    clone_mask = within_mask | total_mask
+    if clone_mask.sum() > target_addition:
+        true_indices = clone_mask.nonzero().squeeze(-1)
+        perm = torch.randperm(true_indices.size(0))
+        selected_indices = true_indices[perm[:target_addition]]
+        
+        clone_mask = torch.zeros_like(clone_mask, dtype=torch.bool)
+        clone_mask[selected_indices] = True
 
     clone_indices = model.indices[clone_mask]
     split_point, bad = get_approx_ray_intersections(stats.within_var_rays)
@@ -367,7 +379,7 @@ def apply_densification(
     torch.cuda.empty_cache()
 
     print(
-        f"#Grow: {grow_mask.sum():4d} #Split: {within_mask.sum():4d} | "
+        f"#Grow: {total_mask.sum():4d} #Split: {within_mask.sum():4d} | "
         f"T_Total: {target_total:4d} T_Within: {target_within:4d} "
         f"Total Avg: {total_var.mean():.4f} Within Avg: {within_var.mean():.4f} "
     )

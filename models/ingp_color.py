@@ -69,6 +69,7 @@ class Model(BaseModel):
         self.dir_offset = torch.tensor([
             [0, 0],
             [math.pi, 0],
+            [math.pi/3, math.pi/3],
         ], device=self.device)
         sh_dim = ((1+max_sh_deg)**2-1)*3
 

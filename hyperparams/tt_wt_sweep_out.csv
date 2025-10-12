@@ -1,0 +1,9 @@
+dataset_path,gpu_id,image_folder,output_folder,psnr,test_LPIPS,test_PSNR,test_SSIM,total_thresh,within_thresh
+/optane/nerf_datasets/360/bonsai,2,images_2,output/bonsai_ifimages_2_wt2_tt2,31.51072202589666,0.27331361174583435,31.343229293823242,0.935165524482727,2,2
+/optane/nerf_datasets/360/garden,1,images_4,output/garden_ifimages_4_wt2_tt2,26.788154463793745,0.18730418384075165,26.5115966796875,0.8318977952003479,2,2
+/optane/nerf_datasets/360/bicycle,3,images_4,output/bicycle_ifimages_4_wt2_tt2,24.025774917943014,0.319768488407135,24.640430450439453,0.7278587222099304,2,2
+/optane/nerf_datasets/360/garden,2,images_4,output/garden_ifimages_4_wt2_tt1,26.804298013692957,0.1891099214553833,26.542306900024414,0.8312528133392334,1,2
+/optane/nerf_datasets/360/bonsai,1,images_2,output/bonsai_ifimages_2_wt2_tt1,31.61322625181483,0.27375778555870056,31.37820053100586,0.9347356557846069,1,2
+/optane/nerf_datasets/360/bicycle,3,images_4,output/bicycle_ifimages_4_wt2_tt1,24.117969620897608,0.32014045119285583,24.62512969970703,0.7273483872413635,1,2
+/optane/nerf_datasets/360/bonsai,1,images_2,output/bonsai_ifimages_2_wt2_tt0.5,31.668098891875363,0.27188706398010254,31.425617218017578,0.9351150989532471,0.5,2
+/optane/nerf_datasets/360/garden,2,images_4,output/garden_ifimages_4_wt2_tt0.5,26.87702123672663,0.18892066180706024,26.523910522460938,0.8317795395851135,0.5,2

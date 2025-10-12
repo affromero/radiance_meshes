@@ -6,7 +6,7 @@ from icecream import ic
 import tinycudann as tcnn
 
 from utils.safe_math import safe_exp, safe_div, safe_sqrt
-from sh_slang.eval_sh_py import eval_sh
+from utils.eval_sh_py import eval_sh
 from utils.hashgrid import HashEmbedderOptimized
 from utils.topo_utils import calculate_circumcenters_torch
 

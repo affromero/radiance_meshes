@@ -68,7 +68,7 @@ args.image_folder = "images_2"
 args.eval = False
 args.dataset_path = Path("/optane/nerf_datasets/360/bonsai")
 args.output_path = Path("output/test/")
-args.iterations = 26000
+args.iterations = 30000
 args.ckpt = ""
 args.resolution = 1
 args.render_train = False
@@ -129,6 +129,8 @@ args.densify_interval = 500
 args.budget = 2_000_000
 args.percent_within = 0.70
 args.percent_total = 0.30
+args.within_thresh = 2.0
+args.total_thresh = 2.0
 args.clone_min_contrib = 0.003
 
 args.lambda_ssim = 0.2
@@ -411,7 +413,8 @@ for iteration in progress_bar:
             model.eval()
             stats = collect_render_stats(sampled_cams, model, args, device)
             model.train()
-            target_addition = targets[dschedule.index(iteration)] - model.vertices.shape[0]
+            # target_addition = targets[dschedule.index(iteration)] - model.vertices.shape[0]
+            target_addition = args.budget - model.vertices.shape[0]
 
             apply_densification(
                 stats,
