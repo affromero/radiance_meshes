@@ -278,7 +278,7 @@ AlphaOut alpha_blend(TensorView<int32_t> sorted_gauss_idx,
 
                     ao = new_ao;
                     // if (new_ao.rgba.a < 1./255.f) {
-                    if (new_ao.rgba.a < -9) {
+                    if (new_ao.rgba.a < -5.5) {
                         thread_active = false;
                         break;
                     }
@@ -567,7 +567,7 @@ VarInfo kern_calc_tet_err(TensorView<int32_t> sorted_gauss_idx,
                     tet_count.InterlockedMax(uint2(g_idx, 1), T_int, old_ival);
 
                     ao = new_ao;
-                    if (new_ao.rgba.a < -9) {
+                    if (new_ao.rgba.a < -5.5) {
                         // This Splat never registred so we subtract it before we break.
                         // local_n_contrib--;
                         thread_active = false;

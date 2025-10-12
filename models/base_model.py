@@ -127,8 +127,8 @@ class BaseModel(nn.Module):
         sh_coeffs = sh.reshape(-1, sh_dim, 3).cpu().numpy().astype(np.float32)
 
         tetra_dict = {}
-        tetra_dict["full_indices"] = self.full_indices.cpu().numpy().astype(np.int32)
-        tetra_dict["mask"] = self.mask.cpu().numpy().astype(np.uint8)
+        tetra_dict["indices"] = self.indices.cpu().numpy().astype(np.int32)
+        # tetra_dict["mask"] = self.mask.cpu().numpy().astype(np.uint8)
         tetra_dict["s"] = np.ascontiguousarray(densities)
         for i, co in enumerate(["x", "y", "z"]):
             tetra_dict[f"grd_{co}"]         = np.ascontiguousarray(grds[:, i])

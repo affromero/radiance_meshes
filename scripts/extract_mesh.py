@@ -13,7 +13,7 @@ from utils.model_util import compute_vertex_colors_from_field, RGB2SH
 from utils.safe_math import safe_div
 
 from utils.topo_utils import build_tv_struct, build_adj_matrix
-from sh_slang.eval_sh_py import eval_sh
+from utils.eval_sh_py import eval_sh
 from utils.topo_utils import calculate_circumcenters_torch
 import tinyplypy
 from itertools import combinations
@@ -166,22 +166,22 @@ def taubin_smooth_hybrid_filtered_ring(
 
     return smoothed_vertices
 
-old_volume = tet_volumes(current_vertices[model.indices])
-smoothed_vertices_one_iter = taubin_smooth_hybrid_filtered_ring(
-    vertices=current_vertices.cpu(),
-    indices=indices_cpu,
-    densities=v_densities,
-    iterations=args.iterations,  # Key change: only one iteration at a time
-    lambda_val=args.factor,
-    mu_val=args.mu_val,
-    sigma=0.010,
-).cuda()
-new_volume = tet_volumes(smoothed_vertices_one_iter[model.indices])
-ratio = safe_div(old_volume, new_volume)
-
-model.interior_vertices = smoothed_vertices_one_iter.clone()
-model.ext_vertices = torch.empty((0, 3), device='cuda')
-model.density.data *= ratio.reshape(model.density.data.shape)
+# old_volume = tet_volumes(current_vertices[model.indices])
+# smoothed_vertices_one_iter = taubin_smooth_hybrid_filtered_ring(
+#     vertices=current_vertices.cpu(),
+#     indices=indices_cpu,
+#     densities=v_densities,
+#     iterations=args.iterations,  # Key change: only one iteration at a time
+#     lambda_val=args.factor,
+#     mu_val=args.mu_val,
+#     sigma=0.010,
+# ).cuda()
+# new_volume = tet_volumes(smoothed_vertices_one_iter[model.indices])
+# ratio = safe_div(old_volume, new_volume)
+#
+# model.interior_vertices = smoothed_vertices_one_iter.clone()
+# model.ext_vertices = torch.empty((0, 3), device='cuda')
+# model.density.data *= ratio.reshape(model.density.data.shape)
 
 cameras = train_cameras
 
