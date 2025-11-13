@@ -1,14 +1,3 @@
-#
-# Copyright (C) 2023, Inria
-# GRAPHDECO research group, https://team.inria.fr/graphdeco
-# All rights reserved.
-#
-# This software is free for non-commercial, research and evaluation use 
-# under the terms of the LICENSE.md file.
-#
-# For inquiries contact  george.drettakis@inria.fr
-#
-
 import torch
 from torch import nn
 import numpy as np
@@ -16,6 +5,7 @@ from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 from data.types import ProjectionType
 from icecream import ic
 import math
+from data.colmap_loader import rotmat2qvec
 
 def fov2focal(fov, pixels):
     return pixels / (2 * math.tan(fov / 2))
@@ -387,17 +377,84 @@ class Camera(nn.Module):
         
         return rays_tensor
 
-class MiniCam:
-    def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
-        self.image_width = width
-        self.image_height = height    
-        self.fovy = fovy
-        self.fovx = fovx
-        self.znear = znear
-        self.zfar = zfar
-        self.world_view_transform = world_view_transform
-        self.full_proj_transform = full_proj_transform
-        view_inv = torch.inverse(self.world_view_transform)
-        self.camera_center = view_inv[3][:3]
+    def write_extrinsic(self, fid, i):
+        """
+        Writes the camera's extrinsics to a file object in
+        COLMAP images.txt format.
 
+        Args:
+            fid: A file object opened in write mode.
+        """
+        # self.R is R_world2cam (3x3)
+        # We need R_cam2world for qvec, which is the transpose
+        R_cam2world = self.R.T
+        qvec = rotmat2qvec(R_cam2world) # rotmat2qvec is assumed to be in scope
+        
+        # self.T is T_world2cam (3,)
+        tvec = self.T
+        
+        # Format: IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME
+        fid.write(f"{i} {qvec[0]} {qvec[1]} {qvec[2]} {qvec[3]} "
+                  f"{tvec[0]} {tvec[1]} {tvec[2]} {self.uid} {self.image_name}\n")
+        
+        # Write the second line (2D keypoints), which we don't store.
+        # An empty line is required for a valid COLMAP images.txt entry.
 
+    def write_intrinsic(self, fid, i):
+        """
+        Writes the camera's intrinsics to a file object in
+        COLMAP cameras.txt format.
+        
+        Tries to reverse-map the stored FoV and distortion
+        parameters back to a compatible COLMAP model.
+
+        Args:
+            fid: A file object opened in write mode.
+        """
+        
+        # Get focal lengths from FoV
+        fx = fov2focal(self.fovx, self.image_width) # fov2focal is assumed to be in scope
+        fy = fov2focal(self.fovy, self.image_height)
+        
+        # Get principal point, using image center as fallback
+        cx = self.cx if self.cx != -1 else self.image_width / 2.0
+        cy = self.cy if self.cy != -1 else self.image_height / 2.0
+        
+        # Get distortion parameters from the tensor
+        # Based on _get_undistorted_coords, self.distortion_params is [k1, k2, p1, p2]
+        dist_params = self.distortion_params.cpu().numpy()
+        k1, k2, p1, p2 = dist_params[0], dist_params[1], dist_params[2], dist_params[3]
+        
+        model_name = ""
+        params = []
+
+        if self.model == ProjectionType.FISHEYE:
+            # Map to SIMPLE_RADIAL_FISHEYE (f, cx, cy, k)
+            # This is an approximation, assuming f=fx and k=k1
+            model_name = "SIMPLE_RADIAL_FISHEYE"
+            params = [fx, cx, cy, k1]
+        
+        elif self.model == ProjectionType.SIMPLE_RADIAL:
+            # Map to SIMPLE_RADIAL (f, cx, cy, k)
+            # This assumes f=fx and k=k1
+            model_name = "SIMPLE_RADIAL"
+            params = [fx, cx, cy, k1]
+
+        else: # Default to PERSPECTIVE models
+            if k2 != 0.0 or p1 != 0.0 or p2 != 0.0:
+                # Map to OPENCV (fx, fy, cx, cy, k1, k2, p1, p2)
+                model_name = "OPENCV"
+                params = [fx, fy, cx, cy, k1, k2, p1, p2]
+            elif k1 != 0.0:
+                # Map to SIMPLE_RADIAL (f, cx, cy, k)
+                # This assumes f=fx.
+                model_name = "SIMPLE_RADIAL"
+                params = [fx, cx, cy, k1]
+            else:
+                # Map to PINHOLE (fx, fy, cx, cy)
+                model_name = "PINHOLE"
+                params = [fx, fy, cx, cy]
+                
+        # Format: CAMERA_ID, MODEL_NAME, WIDTH, HEIGHT, PARAMS...
+        param_str = " ".join(map(str, params))
+        fid.write(f"{i} {model_name} {self.image_width} {self.image_height} {param_str}\n")

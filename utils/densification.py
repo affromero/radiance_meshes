@@ -199,12 +199,15 @@ def collect_render_stats(
         seg_enter = safe_math.safe_div(image_votes[:, 6:9], w)
 
         # keep top-2 candidates per tet across all views
+        image_ssim = image_ssim / tc.clip(min=1)
 
         top_ssim, idx_sorted = torch.cat([top_ssim[:, :2], image_ssim.reshape(-1, 1)], dim=1).sort(1, descending=True)
-        top_size = torch.gather(
-            torch.cat([top_size, tc.reshape(-1, 1)], dim=1), 1,
-            idx_sorted[:, :2]
-        )
+
+        # top_ssim, idx_sorted = torch.cat([top_ssim[:, :2], image_ssim.reshape(-1, 1)], dim=1).sort(1, descending=True)
+        # top_size = torch.gather(
+        #     torch.cat([top_size, tc.reshape(-1, 1)], dim=1), 1,
+        #     idx_sorted[:, :2]
+        # )
 
         # -------- Other stats -------------------------------------------------
         tet_moments[update_mask, :3] += image_votes[update_mask, 13:16]
@@ -275,7 +278,7 @@ def apply_densification(
     total_var_std[s0_t < 1] = 0
 
     N_b = stats.tet_view_count # Num views
-    within_var = (stats.top_ssim / stats.top_size.clip(min=1)).sum(dim=1)
+    within_var = (stats.top_ssim).sum(dim=1)
     total_var = s0_t * total_var_std
     total_var[(N_b < 2) | (s0_t < 1)] = 0
 
