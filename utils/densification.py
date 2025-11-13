@@ -275,8 +275,8 @@ def apply_densification(
     total_var_std[s0_t < 1] = 0
 
     N_b = stats.tet_view_count # Num views
-    within_var = stats.top_ssim.sum(dim=1) / stats.top_size.sum(dim=1).clip(min=1).sqrt()
-    total_var = stats.total_err * total_var_std
+    within_var = (stats.top_ssim / stats.top_size.clip(min=1)).sum(dim=1)
+    total_var = s0_t * total_var_std
     total_var[(N_b < 2) | (s0_t < 1)] = 0
 
     # --- Masking and target calculation --------------------------------------
