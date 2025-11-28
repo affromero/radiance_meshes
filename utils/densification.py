@@ -27,7 +27,6 @@ def determine_cull_mask(
             target, cam, model,
             scene_scaling=model.scene_scaling,
             tile_size=args.tile_size,
-            lambda_ssim=0,
             # glo=glo_list(torch.LongTensor([cam.uid]).to(device))
         )
 
@@ -36,7 +35,6 @@ def determine_cull_mask(
         # peak_contrib = torch.maximum(image_T / tc.clip(min=1), peak_contrib)
         peak_contrib = torch.maximum(max_T, peak_contrib)
 
-    tet_density = model.calc_tet_density()
     mask = ((peak_contrib > args.contrib_threshold))
     return mask
 
@@ -131,7 +129,6 @@ class RenderStats(NamedTuple):
     tet_moments: torch.Tensor           # (T, 4)
     tet_view_count: torch.Tensor             # (T,)
     peak_contrib: torch.Tensor              # (T,)
-    total_err: torch.Tensor
     top_ssim: torch.Tensor
     top_size: torch.Tensor
 
@@ -152,7 +149,6 @@ def collect_render_stats(
 
     top_ssim = torch.zeros((n_tets, 2), device=device)
     top_size = torch.zeros((n_tets, 2), device=device)
-    total_err = torch.zeros((n_tets), device=device)
     peak_contrib = torch.zeros((n_tets), device=device)
     within_var_rays = torch.zeros((n_tets, 2, 6), device=device)
     total_var_moments = torch.zeros((n_tets, 3), device=device)
@@ -162,12 +158,7 @@ def collect_render_stats(
     for cam in sampled_cameras:
         target = cam.original_image.cuda()
 
-        image_votes, extras = render_err(
-            target, cam, model,
-            scene_scaling=model.scene_scaling,
-            tile_size=args.tile_size,
-            lambda_ssim=args.clone_lambda_ssim
-        )
+        image_votes, extras = render_err( target, cam, model, tile_size=args.tile_size)
 
         tc = extras["tet_count"][..., 0]
         max_T = extras["tet_count"][..., 1].float() / 65535
@@ -179,11 +170,9 @@ def collect_render_stats(
 
         # --- Moments (s0: sum of T, s1: sum of err, s2: sum of err^2)
         image_T, image_err, image_err2 = image_votes[:, 0], image_votes[:, 1], image_votes[:, 2]
-        # total_T_p, image_err, image_err2 = image_votes[:, 3], image_votes[:, 4], image_votes[:, 5]
-        _, image_Terr, image_ssim = image_votes[:, 3], image_votes[:, 4], image_votes[:, 5]
+        _, _, image_ssim = image_votes[:, 3], image_votes[:, 4], image_votes[:, 5]
         N = tc
         image_ssim[~update_mask] = 0
-        total_err += image_Terr
 
         # -------- Within-Image Variance (Top-2 per tet) -----------------------
         within_var_mu = safe_math.safe_div(image_err, N)
@@ -191,23 +180,15 @@ def collect_render_stats(
         within_var_std[N < 10] = 0
         within_var_std[~update_mask] = 0 # Use the unified mask
 
-        within_var_votes = image_T * within_var_std
-
         # ray buffer: (enter | exit) → (N, 6)
         w = image_votes[:, 12:13]
         seg_exit = safe_math.safe_div(image_votes[:, 9:12], w)
         seg_enter = safe_math.safe_div(image_votes[:, 6:9], w)
 
+        image_ssim = image_ssim / tc.clip(min=1).sqrt()
+
         # keep top-2 candidates per tet across all views
-        image_ssim = image_ssim / tc.clip(min=1)
-
         top_ssim, idx_sorted = torch.cat([top_ssim[:, :2], image_ssim.reshape(-1, 1)], dim=1).sort(1, descending=True)
-
-        # top_ssim, idx_sorted = torch.cat([top_ssim[:, :2], image_ssim.reshape(-1, 1)], dim=1).sort(1, descending=True)
-        # top_size = torch.gather(
-        #     torch.cat([top_size, tc.reshape(-1, 1)], dim=1), 1,
-        #     idx_sorted[:, :2]
-        # )
 
         # -------- Other stats -------------------------------------------------
         tet_moments[update_mask, :3] += image_votes[update_mask, 13:16]
@@ -251,7 +232,6 @@ def collect_render_stats(
         total_var_moments = total_var_moments,
         tet_moments = tet_moments,
         tet_view_count = tet_view_count,
-        total_err = total_err,
         top_ssim = top_ssim[:, :2],
         top_size = top_size[:, :2],
         peak_contrib = peak_contrib # used for determining what to clone
@@ -284,10 +264,10 @@ def apply_densification(
 
     # --- Masking and target calculation --------------------------------------
     mask_alive = stats.peak_contrib > args.clone_min_contrib
-    total_var[~mask_alive] = 0
-    within_var[~mask_alive] = 0
+    total_var[stats.peak_contrib < args.clone_min_contrib] = 0
+    within_var[stats.peak_contrib < args.split_min_contrib] = 0
 
-    keep_verts = torch.zeros((model.vertices.shape[0]), dtype=torch.int, device=stats.total_err.device)
+    keep_verts = torch.zeros((model.vertices.shape[0]), dtype=torch.int, device=device)
     indices = model.indices.long()
     reduce_type = "sum"
     mask_alive_i = mask_alive.int()
@@ -300,14 +280,9 @@ def apply_densification(
     if target_addition < 0:
         return
 
-    target_total = int(args.percent_total * target_addition)
-    target_within = int(args.percent_within * target_addition)
 
     total_mask = torch.zeros_like(total_var, dtype=torch.bool)
     within_mask = torch.zeros_like(total_mask)
-
-    temp_total_score = total_var.clone()
-    temp_within_score = within_var.clone()
 
     # if target_total > 0:
     #     top_total = torch.topk(temp_total_score, target_total).indices
@@ -368,11 +343,9 @@ def apply_densification(
     barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
     barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
     random_locations = (model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
-    split_point[bad] = random_locations[bad]    # fall back
+    # split_point[bad] = random_locations[bad]    # fall back
 
-    tet_optim.split(clone_indices,
-                    split_point,
-                    **args.as_dict())
+    tet_optim.split(split_point, **args.as_dict())
     # keep_verts = keep_verts > 0
     # keep_verts = torch.cat([keep_verts, torch.ones((model.vertices.shape[0] - keep_verts.shape[0]), device=device, dtype=bool)])
     # print(f"Pruned: {(~keep_verts).sum()}")
@@ -383,6 +356,5 @@ def apply_densification(
 
     print(
         f"#Grow: {total_mask.sum():4d} #Split: {within_mask.sum():4d} | "
-        f"T_Total: {target_total:4d} T_Within: {target_within:4d} "
         f"Total Avg: {total_var.mean():.4f} Within Avg: {within_var.mean():.4f} "
     )

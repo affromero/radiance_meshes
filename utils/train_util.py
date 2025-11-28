@@ -7,6 +7,7 @@ from delaunay_rasterization.internal.alphablend_tiled_slang_interp import AlphaB
 from delaunay_rasterization.internal.render_grid import RenderGrid
 from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader
 from delaunay_rasterization.internal.alphablend_tiled_slang import render_constant_color
+import time
 
 cmap = plt.get_cmap("jet")
 

@@ -24,6 +24,7 @@ from utils.ingp_util import grid_scale, compute_grid_offsets
 from utils.hashgrid import HashEmbedderOptimized
 from utils import hashgrid
 import tinycudann as tcnn
+import time
 
 torch.set_float32_matmul_precision('high')
 
@@ -559,7 +560,6 @@ class TetOptimizer:
                  vertices_lr: float=4e-4,
                  final_vertices_lr: float=4e-7,
                  vertices_lr_delay_multi: float=0.01,
-                 split_std: float = 0.5,
                  lr_delay: int = 500,
                  freeze_start: int = 10000,
                  vert_lr_delay: int = 500,
@@ -592,7 +592,6 @@ class TetOptimizer:
         self.model = model
         self.vertex_rgbs_param_grad = None
         self.vertex_grad = None
-        self.split_std = split_std
 
         self.alpha_sched = get_expon_lr_func(lr_init=percent_alpha*float(model.scene_scaling.cpu()),
                                                 lr_final=1e-20,
@@ -669,39 +668,8 @@ class TetOptimizer:
         self.model.update_triangulation()
 
     @torch.no_grad()
-    def split(self, clone_indices, split_point, split_mode, split_std, **kwargs):
-        device = self.model.device
-        clone_vertices = self.model.vertices[clone_indices]
-
-        if split_mode == "circumcenter":
-            circumcenters, radius = calculate_circumcenters_torch(clone_vertices)
-            radius = radius.reshape(-1, 1)
-            circumcenters = circumcenters.reshape(-1, 3)
-            sphere_loc = sample_uniform_in_sphere(circumcenters.shape[0], 3).to(device)
-            r = torch.randn((clone_indices.shape[0], 1), device=self.model.device)
-            r[r.abs() < 1e-2] = 1e-2
-            sampled_radius = (r * self.split_std + 1) * radius
-            new_vertex_location = l2_normalize_th(sphere_loc) * sampled_radius + circumcenters
-        elif split_mode == "barycenter":
-            barycentric_weights = 0.25*torch.ones((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
-            new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
-        elif split_mode == "barycentric":
-            barycentric = torch.rand((clone_indices.shape[0], clone_indices.shape[1], 1), device=device).clip(min=0.01, max=0.99)
-            barycentric_weights = barycentric / (1e-3+barycentric.sum(dim=1, keepdim=True))
-            new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights).sum(dim=1)
-        elif split_mode == "split_point":
-            _, radius = calculate_circumcenters_torch(self.model.vertices[clone_indices])
-            split_point += (split_std * radius.reshape(-1, 1)).clip(min=1e-3, max=3) * torch.randn(*split_point.shape, device=self.model.device)
-            new_vertex_location = split_point
-            # new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights.unsqueeze(-1)).sum(dim=1)
-        elif split_mode == "split_point_c":
-            barycentric_weights = calc_barycentric(split_point, clone_vertices).clip(min=0)
-            barycentric_weights = barycentric_weights / (1e-3+barycentric_weights.sum(dim=1, keepdim=True))
-            barycentric_weights += 1e-4*torch.randn(*barycentric_weights.shape, device=self.model.device)
-            new_vertex_location = (self.model.vertices[clone_indices] * barycentric_weights.unsqueeze(-1)).sum(dim=1)
-        else:
-            raise Exception(f"Split mode: {split_mode} not supported")
-        self.add_points(new_vertex_location)
+    def split(self, split_point, **kwargs):
+        self.add_points(split_point)
 
     def main_step(self):
         self.optim.step()

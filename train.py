@@ -82,7 +82,6 @@ args.sh_step = 1
 args.encoding_lr = 3e-3
 args.final_encoding_lr = 3e-4
 args.network_lr = 1e-3
-args.sh_lr = 1e-3
 args.final_network_lr = 1e-4
 args.hidden_dim = 64
 args.scale_multi = 0.35 # chosen such that 96% of the distribution is within the sphere 
@@ -114,52 +113,40 @@ args.freeze_lr = 1e-3
 args.final_freeze_lr = 1e-4
 
 # Distortion Settings
-args.lambda_dist = 1e-4
+args.lambda_dist = 0
 
 # Clone Settings
 args.num_samples = 200
 args.k_samples = 1
 args.trunc_sigma = 0.35
-args.clone_lambda_ssim = 0.0
-args.split_std = 1e-1
-args.split_mode = "split_point"
-args.clone_schedule = "quadratic"
 args.min_tet_count = 9
 args.densify_start = 2000
 args.densify_end = 16000
 args.densify_interval = 500
 args.budget = 2_000_000
-args.percent_within = 0.70
-args.percent_total = 0.30
-args.within_thresh = 1.5
-args.total_thresh = 2.0
+args.within_thresh = 2.0
+args.total_thresh = 5.0
 args.clone_min_contrib = 0.003
+args.split_min_contrib = 0.003
 
 args.lambda_ssim = 0.2
-args.base_min_t = 0.4
+args.min_t = 0.4
 args.sample_cam = 8
 args.data_device = 'cpu'
 args.density_threshold = 0.1
 args.alpha_threshold = 0.1
 args.contrib_threshold = 0.0
 args.threshold_start = 4500
+args.voxel_size = 0.01
 
 args.ablate_gradient = False
 args.ablate_circumsphere = True
 args.ablate_downweighing = False
-args.voxel_size = 0.01
 
-args.use_bilateral_grid = False
-args.bilateral_grid_shape = [16, 16, 8]
-args.bilateral_grid_lr = 0.003
-args.lambda_tv_grid = 0.0
-
-args.checkpoint_iterations = []
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
 args.output_path.mkdir(exist_ok=True, parents=True)
-# args.checkpoint_iterations.append(args.freeze_start-1)
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval, resolution=args.resolution)
@@ -178,8 +165,7 @@ else:
     model = Model.init_from_pcd(scene_info.point_cloud, train_cameras, device,
                                 current_sh_deg = args.max_sh_deg if args.sh_interval <= 0 else 0,
                                 **args.as_dict())
-min_t = args.min_t = args.base_min_t# * model.scene_scaling.item()
-ic(min_t)
+min_t = args.min_t
 
 tet_optim = TetOptimizer(model, **args.as_dict())
 if args.eval:
@@ -212,34 +198,6 @@ fig.plot(xs, ys, width=150, height=20)
 fig.show()
 
 densification_sampler = SimpleSampler(len(train_cameras), args.num_samples)
-
-# ----- Initialize bilateral grid if enabled -----
-bil_grids = None
-bil_optimizer = None
-if args.use_bilateral_grid:
-    print("\nInitializing Bilateral Grid:")
-    print(f"- Grid shape: {args.bilateral_grid_shape}")
-    print(f"- Learning rate: {args.bilateral_grid_lr}")
-    print(f"- TV loss weight: {args.lambda_tv_grid}")
-    bil_grids = BilateralGrid(
-        len(train_cameras),
-        grid_X=args.bilateral_grid_shape[0],
-        grid_Y=args.bilateral_grid_shape[1],
-        grid_W=args.bilateral_grid_shape[2],
-    ).to("cuda")
-    bil_optimizer = torch.optim.Adam([bil_grids.grids], lr=args.bilateral_grid_lr, eps=1e-15)
-    
-    # Create a chained scheduler with warmup like in gsplat
-    # First 1000 iterations: linear warmup from 1% to 100% of learning rate
-    # Then exponential decay to 1% of initial learning rate by the end of training
-    bil_warmup = LinearLR(bil_optimizer, start_factor=0.01, total_iters=1000)
-    bil_decay = ExponentialLR(bil_optimizer, gamma=0.01**(1.0/args.iterations))
-    bil_scheduler = ChainedScheduler([bil_warmup, bil_decay])
-    
-    print(f"- Number of grids: {len(train_cameras)}")
-    print("- Using LinearLR warmup + ExponentialLR decay scheduler")
-    print("Bilateral Grid initialized successfully!\n")
-# ------------------------------------------------
 
 video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
@@ -285,21 +243,6 @@ for iteration in progress_bar:
     render_pkg = render(camera, model, scene_scaling=model.scene_scaling, ray_jitter=ray_jitter, **args.as_dict())
     image = render_pkg['render']
 
-    if args.use_bilateral_grid:
-        camera_id = camera_inds[camera.uid]
-        h, w = image.shape[1], image.shape[2]
-        y_coords, x_coords = torch.meshgrid(
-            (torch.arange(h, device="cuda") + 0.5) / h,
-            (torch.arange(w, device="cuda") + 0.5) / w,
-            indexing="ij"
-        )
-        coords = torch.stack([x_coords, y_coords], dim=-1).reshape(-1, 2)
-        img_for_bil = image.permute(1, 2, 0).reshape(-1, 3)
-        img_ids = torch.full((img_for_bil.shape[0],), camera_id, 
-                              device="cuda", dtype=torch.long)
-        transformed = slice(bil_grids, coords, img_for_bil, img_ids)
-        image = transformed["rgb"].reshape(h, w, 3).permute(2, 0, 1)
-
     l1_loss = ((target - image).abs() * gt_mask).mean()
     l2_loss = ((target - image)**2 * gt_mask).mean()
     reg = tet_optim.regularizer(render_pkg, **args.as_dict())
@@ -309,13 +252,6 @@ for iteration in progress_bar:
            args.lambda_ssim*ssim_loss + \
            reg + \
            args.lambda_dist * dl_loss
-
-    if args.use_bilateral_grid:
-        tvloss = args.lambda_tv_grid * total_variation_loss(bil_grids.grids)
-        loss += tvloss
-
-    mask = render_pkg['mask']
-    st = time.time()
 
     loss.backward()
 
@@ -329,11 +265,6 @@ for iteration in progress_bar:
     if do_delaunay:
         tet_optim.vertex_optim.step()
         tet_optim.vertex_optim.zero_grad()
-
-    if args.use_bilateral_grid:
-        bil_optimizer.step()
-        bil_optimizer.zero_grad(set_to_none=True)
-        bil_scheduler.step()
 
     tet_optim.update_learning_rate(iteration)
 
@@ -384,19 +315,6 @@ for iteration in progress_bar:
             del stats
             gc.collect()
             torch.cuda.empty_cache()
-
-    # Save checkpoints at specified iterations
-    if iteration in args.checkpoint_iterations:
-        checkpoint_dir = args.output_path / f"checkpoint_{iteration}"
-        checkpoint_dir.mkdir(exist_ok=True, parents=True)
-        model.save2ply(checkpoint_dir / "ckpt.ply")
-        sd = model.state_dict()
-        sd['indices'] = model.indices
-        torch.save(sd, checkpoint_dir / "ckpt.pth")
-        print(f"Saved checkpoint at iteration {iteration}")
-
-        with (checkpoint_dir / "config.json").open("w") as f:
-            json.dump(args.as_dict(), f, cls=CustomEncoder)
 
     psnr = -20 * math.log10(math.sqrt(l2_loss.detach().cpu().clip(min=1e-6).item()))
     psnrs[-1].append(psnr)
