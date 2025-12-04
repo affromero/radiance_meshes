@@ -185,7 +185,7 @@ def collect_render_stats(
         seg_exit = safe_math.safe_div(image_votes[:, 9:12], w)
         seg_enter = safe_math.safe_div(image_votes[:, 6:9], w)
 
-        image_ssim = image_ssim / tc.clip(min=1).sqrt()
+        image_ssim = image_ssim / tc.clip(min=1)
 
         # keep top-2 candidates per tet across all views
         top_ssim, idx_sorted = torch.cat([top_ssim[:, :2], image_ssim.reshape(-1, 1)], dim=1).sort(1, descending=True)
