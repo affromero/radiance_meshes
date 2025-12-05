@@ -79,6 +79,7 @@ args.sh_interval = 0
 args.sh_step = 1
 
 # iNGP Settings
+args.use_tccn = False
 args.encoding_lr = 3e-3
 args.final_encoding_lr = 3e-4
 args.network_lr = 1e-3

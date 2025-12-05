@@ -103,6 +103,7 @@ class iNGPDW(nn.Module):
                  ablate_downweighing=False,
                  k_samples=1,
                  trunc_sigma=1,
+                 use_tcnn=False,
                  **kwargs):
         super().__init__()
         self.scale_multi = scale_multi
@@ -123,13 +124,18 @@ class iNGPDW(nn.Module):
             base_resolution=base_resolution,
             log2_hashmap_size=log2_hashmap_size,
         )
-        # self.encoding = tcnn.Encoding(3, self.config)
-
-        self.encoding = hashgrid.HashEmbedderOptimized(
-            [torch.zeros((3)), torch.ones((3))],
-            self.L, n_features_per_level=self.dim,
-            log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
-            finest_resolution=base_resolution*per_level_scale**self.L)
+        if use_tcnn:
+            self.encoding = tcnn.Encoding(3, self.config)
+            print("Using TCNN")
+            self.compile = False
+        else:
+            print("Using PyTorch iNGP")
+            self.encoding = hashgrid.HashEmbedderOptimized(
+                [torch.zeros((3)), torch.ones((3))],
+                self.L, n_features_per_level=self.dim,
+                log2_hashmap_size=log2_hashmap_size, base_resolution=base_resolution,
+                finest_resolution=base_resolution*per_level_scale**self.L)
+            self.compile = True
 
 
         def mk_head(n):
@@ -166,7 +172,6 @@ class iNGPDW(nn.Module):
 
 
     def _encode(self, x: torch.Tensor, cr: torch.Tensor):
-        x = x.detach()
         output = self.encoding(x)
         output = output.reshape(-1, self.dim, self.L)
         if not self.ablate_downweighing:
@@ -226,7 +231,13 @@ class Model(BaseModel):
         ], device=self.device)
         sh_dim = ((1+max_sh_deg)**2-1)*3
 
-        self.backbone = torch.compile(iNGPDW(sh_dim, **kwargs)).to(self.device)
+        module = iNGPDW(sh_dim, **kwargs)
+        self.compile = module.compile
+        if module.compile:
+            self.backbone = torch.compile(module).to(self.device)
+        else:
+            self.backbone = module.to(self.device)
+
 
         # backbone = iNGPDW(sh_dim, **kwargs).to(self.device)
         # sample_cv = torch.rand((512, 3)).to(self.device)
@@ -551,7 +562,18 @@ class Model(BaseModel):
         
 
     def compute_weight_decay(self):
-        return sum([(embed.weight**2).mean() for embed in self.backbone.encoding.embeddings])
+        if self.compile:
+            return sum([(embed.weight**2).mean() for embed in self.backbone.encoding.embeddings])
+        else:
+            param = list(self.backbone.encoding.parameters())[0]
+            weight_decay = 0
+            ind = 0
+            for i in range(self.different_size):
+                o = self.offsets[i+1] - self.offsets[i]
+                weight_decay = weight_decay + (param[ind:self.offsets[i+1]]**2).mean()
+                ind += o
+            weight_decay = weight_decay + (param[ind:].reshape(-1, self.nominal_offset_size)**2).mean(dim=1).sum()
+            return weight_decay
 
 class TetOptimizer:
     def __init__(self,
