@@ -22,6 +22,7 @@ uv pip install torch
 ```
 Dependencies:
 Then, it is as simple as running the command `uv run` instead of python to run the code. It installs everything super quickly.
+For the first run, you must use the flag `uv run --no-build-isolation`
 Example running command for bonsai:
 ```
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run train.py --eval  --dataset_path /data/nerf_datasets/360/bonsai --image_folder images_2 --output_path output/bonsai

@@ -6,7 +6,6 @@ from data.camera import Camera
 from delaunay_rasterization.internal.alphablend_tiled_slang_interp import AlphaBlendTiledRender
 from delaunay_rasterization.internal.render_grid import RenderGrid
 from delaunay_rasterization.internal.tile_shader_slang import vertex_and_tile_shader
-from delaunay_rasterization.internal.alphablend_tiled_slang import render_constant_color
 from utils.eval_sh_py import weigh_degree
 import time
 from icecream import ic
@@ -163,27 +162,3 @@ class SpikingLR:
         peak_ind = iteration - last_peak
         height = self.peak_height_fn(peak_ind) - self.base_function(peak_ind)
         return base_f + self.peak_fn(last_peak, height)
-
-def render_debug(render_tensor, model, camera, density_multi=1, tile_size=16):
-
-    # Convert to RGB (NxMx3) using the colormap
-    _, features = model.get_cell_values(camera)
-    tet_grad_color = torch.zeros((features.shape[0], 4), device=features.device)
-    if render_tensor.shape[1] == 1:
-        tensor_min, tensor_max = render_tensor.min(), torch.quantile(render_tensor, 0.99)
-        normalized_tensor = ((render_tensor - tensor_min) / (tensor_max - tensor_min)).clip(0, 1)
-        normalized_tensor = torch.as_tensor(
-            cmap(normalized_tensor.reshape(-1).cpu().numpy())).float().cuda()
-    else:
-        normalized_tensor = render_tensor
-    tet_grad_color[:, :normalized_tensor.shape[1]] = normalized_tensor
-    if render_tensor.shape[1] < 4:
-        tet_grad_color[:, 3] = features[:, 0] * density_multi# * render_tensor.reshape(-1)
-    render_pkg = render_constant_color(model.indices, model.vertices, None, camera, cell_values=tet_grad_color, tile_size=tile_size)
-
-    image = render_pkg['render']
-    image = image.permute(1, 2, 0)
-    image = (image.detach().cpu().numpy() * 255).clip(min=0, max=255).astype(np.uint8)
-
-    del render_pkg, render_tensor
-    return image
