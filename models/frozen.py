@@ -8,10 +8,7 @@ from pathlib import Path
 import open3d as o3d
 
 from gdel3d import Del
-from data.camera import Camera
-from utils.topo_utils import (
-    build_tv_struct, max_density_contrast, fibonacci_spiral_on_sphere, tet_volumes
-)
+from utils.topo_utils import tet_volumes
 from utils.model_util import activate_output
 from utils import optim
 from utils.model_util import *
@@ -188,12 +185,13 @@ class FrozenTetModel(BaseModel):
             sh       = self.sh
 
         sh_dim = (self.max_sh_deg+1)**2 - 1
-        return circumcenter, density, rgb, grd, sh.reshape(-1, sh_dim, 3)
+        attr = torch.empty((sh.shape[0], 0))
+        return circumcenter, density, rgb, grd, sh.reshape(-1, sh_dim, 3), attr
 
     def compute_features(self, offset=False):
         vertices = self.vertices
         indices = self.indices
-        circumcenters, density, rgb, grd, sh = self.compute_batch_features(vertices, indices)
+        circumcenters, density, rgb, grd, sh, attr = self.compute_batch_features(vertices, indices)
         tets = vertices[indices]
         if offset:
             base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
@@ -206,20 +204,21 @@ class FrozenTetModel(BaseModel):
     # ------------------------------------------------------------------
     def get_cell_values(
         self,
-        camera: Camera,
+        camera,
         mask: Optional[torch.Tensor] = None,
         all_circumcenters: Optional[torch.Tensor] = None,
         radii: Optional[torch.Tensor] = None,
     ):
         indices = self.indices[mask] if mask is not None else self.indices
         vertices = self.vertices
-        cc, density, rgb, grd, sh = self.compute_batch_features(
+        cc, density, rgb, grd, sh, attr = self.compute_batch_features(
             vertices, indices, mask, circumcenters=all_circumcenters
         )
         cell_output = activate_output(
             camera.camera_center.to(self.device),
             density, rgb, grd,
             sh.reshape(-1, (self.max_sh_deg+1)**2 - 1, 3),
+            attr,
             indices,
             cc, vertices,
             self.max_sh_deg, self.max_sh_deg,
@@ -264,7 +263,7 @@ class FrozenTetModel(BaseModel):
     def calc_tet_density(self):
         densities = []
         verts = self.vertices
-        _, densities, _, _, _ = self.compute_batch_features(verts, self.indices)
+        _, densities, _, _, _, _ = self.compute_batch_features(verts, self.indices)
         return densities.reshape(-1)
 
 
@@ -469,7 +468,7 @@ def bake_from_model(base_model, mask, chunk_size: int = 408_576) -> FrozenTetMod
     d_list, rgb_list, grd_list, sh_list = [], [], [], []
     for start in range(0, indices.shape[0], chunk_size):
         end = min(start + chunk_size, indices.shape[0])
-        _, density, rgb, grd, sh = base_model.compute_batch_features(
+        _, density, rgb, grd, sh, attr = base_model.compute_batch_features(
             vertices_full, indices, start, end
         )
         d_list.append(density.detach().cpu())

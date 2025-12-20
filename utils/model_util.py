@@ -86,12 +86,11 @@ def offset_normalize(rgb, grd, circumcenters, tets):
     normed_grd = safe_div(grd, radius)
     vcolors = compute_vertex_colors_from_field(
         tets.detach(), rgb.reshape(-1, 3), normed_grd.float(), circumcenters.float().detach())
-
     base_color_v0_raw = vcolors[:, 0]
     return base_color_v0_raw, normed_grd
 
 @torch.jit.script
-def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters, vertices, current_sh_deg:int, max_sh_deg:int):
+def activate_output(camera_center, density, rgb, grd, sh, attr, indices, circumcenters, vertices, current_sh_deg:int, max_sh_deg:int):
     tets = vertices[indices]
     base_color_v0_raw, normed_grd = offset_normalize(rgb, grd, circumcenters, tets)
     tet_color_raw = eval_sh(
@@ -101,5 +100,5 @@ def activate_output(camera_center, density, rgb, grd, sh, indices, circumcenters
         camera_center,
         current_sh_deg).float()
     base_color_v0 = torch.nn.functional.softplus(tet_color_raw.reshape(-1, 3, 1), beta=10)
-    features = torch.cat([density, base_color_v0.reshape(-1, 3), normed_grd.reshape(-1, 3)], dim=1)
+    features = torch.cat([density, base_color_v0.reshape(-1, 3), normed_grd.reshape(-1, 3), attr], dim=1)
     return features.float()

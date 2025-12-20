@@ -21,12 +21,12 @@ class BaseModel(nn.Module):
         vertices = self.vertices
 
         if self.chunk_size is None:
-            cc, normalized, density, rgb, grd, sh = self.compute_batch_features(
+            cc, normalized, density, rgb, grd, sh, attr = self.compute_batch_features(
                 vertices, indices, start, end, circumcenters=all_circumcenters
             )
             cell_output = activate_output(
                 camera.camera_center.to(self.device),
-                density, rgb, grd, sh, indices,
+                density, rgb, grd, sh, attr, indices,
                 cc, vertices,
                 self.max_sh_deg, self.max_sh_deg,
             )
@@ -37,10 +37,10 @@ class BaseModel(nn.Module):
             start = 0
             for start in range(0, indices.shape[0], self.chunk_size):
                 end = min(start + self.chunk_size, indices.shape[0])
-                circumcenters, density, rgb, grd, sh = self.compute_batch_features(
+                circumcenters, density, rgb, grd, sh, attr = self.compute_batch_features(
                     vertices, indices, start, end, circumcenters=all_circumcenters)
                 dvrgbs = activate_output(camera.camera_center.to(self.device),
-                                         density, rgb, grd, sh, indices[start:end],
+                                         density, rgb, grd, sh, attr, indices[start:end],
                                          circumcenters,
                                          vertices, self.current_sh_deg, self.max_sh_deg)
                 normed_cc.append(normalized)

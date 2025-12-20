@@ -77,7 +77,7 @@ def SH2RGB(sh):
     return sh * C0 + 0.5
 
 @torch.jit.script
-def eval_sh(deg: int, sh, dirs):
+def eval_sh2(deg: int, sh, dirs):
     """
     Evaluate spherical harmonics at unit directions
     using hardcoded SH polynomials.
@@ -94,7 +94,7 @@ def eval_sh(deg: int, sh, dirs):
     coeff = (deg + 1) ** 2
     assert sh.shape[-1] >= coeff
 
-    result = 0.28209479177387814 * sh[..., 0] + 0.5
+    result = 0.28209479177387814 * sh[..., 0]
     if deg > 0:
         x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
         result = (result -

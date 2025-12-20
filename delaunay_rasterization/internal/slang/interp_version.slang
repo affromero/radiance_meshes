@@ -3,6 +3,13 @@ import utils;
 import safe_math;
 import camera;
 
+struct CtrlPt: IDifferentiable {
+    float4 rgba;
+    float2 dist;
+    float density;
+    float4 xyzd;
+};
+
 struct SplatTetrahedra_interp : IDifferentiable
 {
     uint4 vtet;
@@ -29,30 +36,36 @@ inline float phi(float x) {
 }
 
 [Differentiable]
-inline float3 compute_integral(float3 c0, float3 c1, float ddt) {
+inline float compute_integral1D(float c0, float c1, float ddt) {
     float alpha = safe_exp(-ddt);
-    
     float phi_val = phi(ddt);
-    
     float w0 = phi_val - alpha;
     float w1 = 1.0f - phi_val;
-    
+    return w0 * c0 + w1 * c1;
+}
+[Differentiable]
+inline float3 compute_integral(float3 c0, float3 c1, float ddt) {
+    float alpha = safe_exp(-ddt);
+    float phi_val = phi(ddt);
+    float w0 = phi_val - alpha;
+    float w1 = 1.0f - phi_val;
     return w0 * c0 + w1 * c1;
 }
 
 [Differentiable]
 inline CtrlPt integrate_tetra_segment(
     in SplatTetrahedra_interp g, 
-    in float3 ray_o,
-    in float3 ray_d,
+    in Ray ray,
     in float enter,
     in float exit,
+    in float3 enter_norm,
+    in float3 exit_norm,
 )
 {
     float dt = max(exit - enter, 0.0f);
 
-    float3 v_enter = enter * ray_d + ray_o - g.tet.verts[0];
-    float3 v_exit = exit * ray_d + ray_o - g.tet.verts[0];
+    float3 v_enter = enter * ray.d + ray.o - g.tet.verts[0];
+    float3 v_exit = exit * ray.d + ray.o - g.tet.verts[0];
     // float3 c_enter = max(dot(g.grd, v_enter) + g.base_color, 0.f);
     // float3 c_exit = max(dot(g.grd, v_exit) + g.base_color, 0.f);
     float3 c_enter = dot(g.grd, v_enter) + g.base_color;
@@ -60,13 +73,16 @@ inline CtrlPt integrate_tetra_segment(
 
     // float alpha = safe_clip(1.0f - safe_exp(-g.density * dt), 0.f, 1.f);
     float alpha = max(-safe_expm1(-g.density * dt), 0.f);
-    float3 final_color = compute_integral(c_exit, c_enter, dt*g.density);
+    float3 final_color = compute_integral(c_exit, c_enter, dt * g.density);
 
-    float4 rgba = {final_color.x,
+    float3 rendered_norm = alpha * l2_normalize(enter_norm);
+    float depth = safe_div(compute_integral1D(enter, exit, dt * g.density), ray.ortho);
+
+    float4 rgba = { final_color.x,
                     final_color.y,
                     final_color.z,
-                    g.density * dt};
-    return { rgba, {enter, exit}, g.density };
+                    g.density * dt };
+    return { rgba, { enter, exit }, g.density, float4(rendered_norm, depth) };
 }
 
 [Differentiable]
@@ -91,7 +107,7 @@ inline bool evaluate_tetra_interp(
         ctrl_pt = { (float4)(0.f, 0.f, 0.f, 0.f), {0.f, 0.f}, g.density };
         return false;
     } else {
-        ctrl_pt = integrate_tetra_segment(g, ray.o, ray.d, enter, exit);
+        ctrl_pt = integrate_tetra_segment(g, ray, enter, exit, enter_norm, exit_norm);
         return true;
     }
 }

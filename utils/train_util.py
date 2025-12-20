@@ -78,6 +78,8 @@ def render(camera: Camera, model, cell_values=None, tile_size=16, min_t=0.1,
         'mask': mask,
         'xyzd': rxyzd_img,
         'sh_reg': sh_reg,
+        'weight_square': image_rgb.permute(2,0,1)[4:5, ...],
+        "cell_values": cell_values,
         **extras
     }
     return render_pkg
@@ -168,3 +170,21 @@ class SpikingLR:
         peak_ind = iteration - last_peak
         height = self.peak_height_fn(peak_ind) - self.base_function(peak_ind)
         return base_f + self.peak_fn(last_peak, height)
+
+class SimpleSampler:
+    def __init__(self, total_num_samples, batch_size, device):
+        self.total_num_samples = total_num_samples
+        self.batch_size = batch_size
+        self.curr = total_num_samples
+        self.ids = None
+        self.device = device
+
+    def nextids(self, batch_size=None):
+        batch_size = self.batch_size if batch_size is None else batch_size
+        self.curr += batch_size
+        if self.curr + batch_size > self.total_num_samples:
+            # self.ids = torch.LongTensor(np.random.permutation(self.total_num_samples))
+            self.ids = torch.randperm(self.total_num_samples, dtype=torch.long, device=self.device)
+            self.curr = 0
+        ids = self.ids[self.curr : self.curr + batch_size]
+        return ids

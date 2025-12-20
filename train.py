@@ -16,14 +16,12 @@ import time
 from tqdm import tqdm
 import numpy as np
 from utils import cam_util
-from utils.train_util import render, pad_image2even, pad_hw2even
+from utils.train_util import render, pad_image2even, pad_hw2even, SimpleSampler
 # from models.vertex_color import Model, TetOptimizer
 from models.ingp_color import Model, TetOptimizer
 # from models.frozen import FrozenTetModel as Model
 # from models.frozen import FrozenTetOptimizer as TetOptimizer
 from models.frozen import freeze_model
-# from models.ingp_density import Model, TetOptimizer
-# from models.frozen_vertices import freeze_model
 from fused_ssim import fused_ssim
 from pathlib import Path, PosixPath
 from utils.args import Args
@@ -31,10 +29,8 @@ import json
 import imageio
 from utils import test_util
 import termplotlib as tpl
-from utils.lib_bilagrid import BilateralGrid, total_variation_loss, slice
-from torch.optim.lr_scheduler import ExponentialLR, LinearLR, ChainedScheduler
 import gc
-from utils.densification import collect_render_stats, apply_densification, determine_cull_mask
+from utils.densification import collect_render_stats, apply_densification
 import mediapy
 from utils.graphics_utils import calculate_norm_loss, depth_to_normals
 from icecream import ic
@@ -46,23 +42,6 @@ class CustomEncoder(json.JSONEncoder):
         if isinstance(o, PosixPath):
             return str(o)
         return super().default(o)
-
-class SimpleSampler:
-    def __init__(self, total_num_samples, batch_size):
-        self.total_num_samples = total_num_samples
-        self.batch_size = batch_size
-        self.curr = total_num_samples
-        self.ids = None
-
-    def nextids(self, batch_size=None):
-        batch_size = self.batch_size if batch_size is None else batch_size
-        self.curr += batch_size
-        if self.curr + batch_size > self.total_num_samples:
-            # self.ids = torch.LongTensor(np.random.permutation(self.total_num_samples))
-            self.ids = torch.randperm(self.total_num_samples, dtype=torch.long, device=device)
-            self.curr = 0
-        ids = self.ids[self.curr : self.curr + batch_size]
-        return ids
 
 eps = torch.finfo(torch.float).eps
 args = Args()
@@ -98,6 +77,7 @@ args.density_offset = -4
 args.lambda_weight_decay = 1
 args.percent_alpha = 0.0 # preconditioning
 args.spike_duration = 500
+args.additional_attr = 0
 
 args.g_init=1.0
 args.s_init=1e-4
@@ -113,11 +93,11 @@ args.vertices_lr_delay_multi = 1e-8
 args.delaunay_interval = 10
 
 args.freeze_start = 18000
-args.freeze_lr = 1e-2
+args.freeze_lr = 1e-3
 args.final_freeze_lr = 1e-4
 
 # Distortion Settings
-args.lambda_dist = 1e-4
+args.lambda_dist = 0.0
 args.lambda_norm = 0.0
 args.lambda_sh = 0.0
 
@@ -203,7 +183,7 @@ dschedule = list(range(args.densify_start, args.densify_end, args.densify_interv
 # fig.plot(xs, ys, width=150, height=20)
 # fig.show()
 
-densification_sampler = SimpleSampler(len(train_cameras), args.num_samples)
+densification_sampler = SimpleSampler(len(train_cameras), args.num_samples, device)
 
 video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
@@ -216,6 +196,24 @@ for iteration in progress_bar:
     do_cloning = iteration in dschedule
     do_sh_up = not args.sh_interval == 0 and iteration % args.sh_interval == 0 and iteration > 0
     do_sh_step = iteration % args.sh_step == 0
+
+    if do_delaunay or do_freeze:
+        st = time.time()
+        tet_optim.update_triangulation(
+            density_threshold=args.density_threshold if iteration > args.threshold_start else 0,
+            alpha_threshold=args.alpha_threshold if iteration > args.threshold_start else 0, high_precision=do_freeze)
+        if do_freeze:
+            del tet_optim
+            # model.eval()
+            # mask = determine_cull_mask(train_cameras, model, args, device)
+            n_tets = model.indices.shape[0]
+            mask = torch.ones((n_tets), device=device, dtype=bool)
+            # model.train()
+            print(f"Kept {mask.sum()} tets")
+            model, tet_optim = freeze_model(model, mask, args)
+            # model, tet_optim = freeze_model(model, **args.as_dict())
+            gc.collect()
+            torch.cuda.empty_cache()
 
     if len(inds) == 0:
         inds = list(range(len(train_cameras)))
@@ -262,14 +260,14 @@ for iteration in progress_bar:
     if do_sh_up:
         model.sh_up()
 
-    if iteration % 1 == 0:
-        with torch.no_grad():
-            render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
-            sample_image = render_pkg['render']
-            sample_image = sample_image.permute(1, 2, 0)
-            sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
-            sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
-            video_writer.write(pad_image2even(sample_image))
+    # if iteration % 10 == 0:
+    #     with torch.no_grad():
+    #         render_pkg = render(sample_camera, model, min_t=min_t, tile_size=args.tile_size)
+    #         sample_image = render_pkg['render']
+    #         sample_image = sample_image.permute(1, 2, 0)
+    #         sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
+    #         sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
+    #         video_writer.write(pad_image2even(sample_image))
 
     if do_cloning and not model.frozen:
         with torch.no_grad():

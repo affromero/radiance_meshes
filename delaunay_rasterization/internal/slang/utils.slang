@@ -19,12 +19,6 @@ static const float FLT_MAX = 1e20;
 static const float FLT_MIN = -1e20;
 static const float eps = 1e-7;
 
-struct SplatTetrahedra : IDifferentiable
-{
-    Tetrahedra tet;
-    float4 rgbs;
-};
-
 [Differentiable]
 float read_t1_float(uint32_t idx, DiffTensorView t1)
 {
@@ -122,64 +116,4 @@ Tetrahedra load_tetrahedra(TensorView<float> vertices,
         read_t3_float3(virtual_tetra.w, vertices),
     };
     return { tetra };
-}
-
-[Differentiable]
-SplatTetrahedra load_tet_alphablend(int32_t g_idx,
-                                    DiffTensorView vertices,
-                                    TensorView<int32_t> indices,
-                                    DiffTensorView rgbs)
-{
-    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
-    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
-    return {
-        tet,
-        read_t4_float4(g_idx, rgbs)
-    };
-}
-
-SplatTetrahedra load_tet_alphablend(int32_t g_idx,
-                                    TensorView<float> vertices,
-                                    TensorView<int32_t> indices,
-                                    TensorView<float> rgbs)
-{
-    uint4 virtual_tet = load_virtual_tetrahedra(g_idx, indices);
-    Tetrahedra tet = load_tetrahedra(vertices, virtual_tet);
-    return {
-        tet,
-        read_t4_float4(g_idx, rgbs)
-    };
-}
-
-struct CtrlPt: IDifferentiable {
-    float4 rgba;
-    float2 dist;
-    float density;
-    float4 xyzd;
-};
-
-[Differentiable]
-CtrlPt evaluate_tetra(in SplatTetrahedra g, 
-                      in float3 ray_o,
-                      in float3 ray_d)
-{
-    // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
-    // float2 dist = ray_tetrahedron_intersect(ray_o, ray_d, g.tet);
-    float2 dist;
-    // bool hit = cyrusBeckTetrahedronShearScale(
-    int exit_face;
-    float3 enter_norm, exit_norm;
-    bool hit = ray_tetrahedron_intersect_fused(
-        ray_o, ray_d, float4x3(g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]), dist, enter_norm, exit_norm);
-    float intersection_t = (dist.x + dist.y)/2.f;
-    float dt = max(abs(dist.y - dist.x), 0.0f);
-    // float2 dist = cyrusBeckTetrahedronShearScale(ray_o, ray_d, g.tet.verts[0], g.tet.verts[1], g.tet.verts[2], g.tet.verts[3]);
-    if (!hit) {
-        return {{0.f, 0.f, 0.f, 0.f}, dist, g.rgbs.w};
-    } else {
-        float alpha = safe_clip(1-safe_exp(-g.rgbs.w * dt), 0, 1);
-        float4 rgba = {
-            alpha * g.rgbs.x, alpha * g.rgbs.y, alpha * g.rgbs.z, alpha};
-        return {rgba, dist, g.rgbs.w};
-    }
 }

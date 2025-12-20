@@ -103,6 +103,7 @@ class iNGPDW(nn.Module):
                  ablate_downweighing=False,
                  k_samples=1,
                  trunc_sigma=1,
+                 additional_attr=0,
                  use_tcnn=False,
                  **kwargs):
         super().__init__()
@@ -115,6 +116,8 @@ class iNGPDW(nn.Module):
         self.ablate_downweighing = ablate_downweighing
         self.k_samples = k_samples
         self.trunc_sigma = trunc_sigma
+        self.additional_attr = additional_attr
+        self.sh_dim = sh_dim
 
         self.config = dict(
             per_level_scale=per_level_scale,
@@ -150,16 +153,22 @@ class iNGPDW(nn.Module):
             network.apply(lambda m: init_linear(m, gain))
             return network
 
-        self.network = mk_head(1+12+sh_dim)
+        self.network = mk_head(additional_attr)
 
         self.density_net   = mk_head(1)
         self.color_net     = mk_head(3)
         self.gradient_net  = mk_head(3)
         self.sh_net        = mk_head(sh_dim)
+        
+        self.g_init = g_init
+        self.s_init = s_init
+        self.d_init = d_init
+        self.c_init = c_init
 
         last = self.network[-1]
         with torch.no_grad():
-            last.weight[4:, :].zero_()
+            # last.weight[4:, :].zero_()
+            nn.init.uniform_(last.weight.data, a=-1, b=1)
             last.bias[4:].zero_()
             for network, eps in zip(
                 [self.gradient_net, self.sh_net, self.density_net, self.color_net], 
@@ -193,11 +202,22 @@ class iNGPDW(nn.Module):
             output = self._encode(x, cr)
 
         h = output.reshape(-1, self.L * self.dim).float()
+        # h = self.network(h)
+        # sigma = self.d_init * h[:, :1]
+        # rgb = self.c_init * h[:, 1:4]
+        # field_samples = self.g_init * h[:, 4:7]
+        # sh = self.s_init * h[:, 7:7+self.sh_dim].half()
+        # attr = h[:, 7+self.sh_dim:]
 
         sigma = self.density_net(h)
         rgb = self.color_net(h)
         field_samples = self.gradient_net(h)
         sh  = self.sh_net(h).half()
+
+        if self.additional_attr > 0:
+            attr = self.network(h)
+        else:
+            attr = torch.empty()
 
         rgb = rgb.reshape(-1, 3, 1) + 0.5
         density = safe_exp(sigma+self.density_offset)
@@ -205,7 +225,7 @@ class iNGPDW(nn.Module):
         grd = field_samples.reshape(-1, 1, 3)
         grd = grd / ((grd * grd).sum(dim=-1, keepdim=True) + 1).sqrt()
         # grd = rgb * torch.tanh(field_samples.reshape(-1, 3, 3))  # shape (T, 3, 3)
-        return density, rgb.reshape(-1, 3), grd, sh
+        return density, rgb.reshape(-1, 3), grd, sh, attr
 
 class Model(BaseModel):
     def __init__(self,
@@ -216,6 +236,7 @@ class Model(BaseModel):
                  density_offset=-1,
                  current_sh_deg=2,
                  max_sh_deg=2,
+                 additional_attr=0,
                  ablate_circumsphere=False,
                  ablate_gradient=False,
                  **kwargs):
@@ -231,7 +252,7 @@ class Model(BaseModel):
         ], device=self.device)
         sh_dim = ((1+max_sh_deg)**2-1)*3
 
-        module = iNGPDW(sh_dim, **kwargs)
+        module = iNGPDW(sh_dim, additional_attr=additional_attr, **kwargs)
         self.compile = module.compile
         if module.compile:
             self.backbone = torch.compile(module).to(self.device)
@@ -265,7 +286,7 @@ class Model(BaseModel):
         self.mask_values = True
         self.frozen = False
         self.linear = False
-        self.feature_dim = 7
+        self.feature_dim = 7 + additional_attr
         self.alpha = 0
         self.ablate_circumsphere = ablate_circumsphere
         self.ablate_gradient = ablate_gradient
@@ -369,7 +390,7 @@ class Model(BaseModel):
         start = 0
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
-            circumcenters, density, rgb, grd, sh = self.compute_batch_features(
+            circumcenters, density, rgb, grd, sh, attr = self.compute_batch_features(
                 vertices, indices, start, end, circumcenters=all_circumcenters)
             if self.ablate_gradient:
                 grd = torch.zeros_like(grd)
@@ -378,6 +399,7 @@ class Model(BaseModel):
             dvrgbs = activate_output(camera.camera_center.to(self.device),
                                      density, rgb, grd,
                                      sh.reshape(-1, sh_dim, 3),
+                                     attr,
                                      indices[start:end],
                                      centroids,
                                      vertices.detach(),
@@ -455,7 +477,6 @@ class Model(BaseModel):
         config_path = path / "config.json"
         config = Args.load_from_json(str(config_path))
         ckpt = torch.load(ckpt_path)
-        print(ckpt.keys())
         vertices = ckpt['contracted_vertices']
         indices = ckpt["indices"]  # shape (N,4)
         del ckpt["indices"]
@@ -468,7 +489,7 @@ class Model(BaseModel):
         ext_vertices = ckpt['ext_vertices']
         model = Model(vertices.to(device), ext_vertices, ckpt['center'], ckpt['scene_scaling'], **config.as_dict())
         model.load_state_dict(ckpt)
-        model.min_t = model.scene_scaling * config.base_min_t
+        model.min_t = config.min_t
         model.indices = torch.as_tensor(indices).cuda()
         model.empty_indices = torch.as_tensor(empty_indices).cuda()
         return model
@@ -491,7 +512,7 @@ class Model(BaseModel):
         for start in range(0, indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, indices.shape[0])
 
-            circumcenters, density, rgb, grd, sh = self.compute_batch_features(vertices, indices, start, end)
+            circumcenters, density, rgb, grd, sh, _ = self.compute_batch_features(vertices, indices, start, end)
             tets = vertices[indices[start:end]]
             cs.append(circumcenters)
             ds.append(density)
