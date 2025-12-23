@@ -24,11 +24,11 @@ groupshared SplatTetrahedra_interp collected_splats[TILE_HEIGHT * TILE_WIDTH];
 groupshared uint32_t collected_idx[TILE_HEIGHT * TILE_WIDTH];
 
 struct DistortionState5 : IDifferentiable {
-    float x;  // old_state.x
-    float y;  // old_state.y
-    float z;  // old_state.z
-    float w;  // old_state.w
-    float v;  // new 5th term, e.g., for w_i^2 * interval / 3, or anything else
+    float x;
+    float y;
+    float z;
+    float w;
+    float v;
 };
 
 [Differentiable]

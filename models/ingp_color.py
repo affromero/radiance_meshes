@@ -164,21 +164,25 @@ class iNGPDW(nn.Module):
         self.s_init = s_init
         self.d_init = d_init
         self.c_init = c_init
+        self.init_weights()
 
+    def init_weights(self, skip_density=False):
+        nets = [self.gradient_net, self.sh_net, self.color_net]
+        vals = [self.g_init, self.s_init, self.c_init]
+        if not skip_density:
+            nets += [self.density_net]
+            vals += [self.d_init]
         last = self.network[-1]
         with torch.no_grad():
             # last.weight[4:, :].zero_()
             nn.init.uniform_(last.weight.data, a=-1, b=1)
             last.bias[4:].zero_()
-            for network, eps in zip(
-                [self.gradient_net, self.sh_net, self.density_net, self.color_net], 
-                [g_init, s_init, d_init, c_init]):
+            for network, eps in zip(nets, vals):
                 last = network[-1]
                 with torch.no_grad():
                     nn.init.uniform_(last.weight.data, a=-eps, b=eps)
                     # nn.init.xavier_uniform_(m.weight, gain)
                     last.bias.zero_()
-
 
     def _encode(self, x: torch.Tensor, cr: torch.Tensor):
         output = self.encoding(x)
@@ -217,7 +221,7 @@ class iNGPDW(nn.Module):
         if self.additional_attr > 0:
             attr = self.network(h)
         else:
-            attr = torch.empty()
+            attr = torch.empty((h.shape[0], 0), device=output.device)
 
         rgb = rgb.reshape(-1, 3, 1) + 0.5
         density = safe_exp(sigma+self.density_offset)
