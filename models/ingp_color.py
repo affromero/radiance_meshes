@@ -178,6 +178,9 @@ class iNGPDW(nn.Module):
             nn.init.uniform_(last.weight.data, a=-1, b=1)
             last.bias[4:].zero_()
             for network, eps in zip(nets, vals):
+                for layer in network[:-1]:
+                    if hasattr(layer, 'weight'):
+                        nn.init.xavier_uniform_(layer.weight.data, nn.init.calculate_gain('relu'))
                 last = network[-1]
                 with torch.no_grad():
                     nn.init.uniform_(last.weight.data, a=-eps, b=eps)
@@ -628,7 +631,7 @@ class TetOptimizer:
         ], ignore_param_list=["encoding", "network"], betas=[0.9, 0.999], eps=1e-15)
 
         self.net_optim = optim.CustomAdam([
-            # {"params": model.backbone.network.parameters(),   "lr": network_lr,  "name": "density"},
+            {"params": model.backbone.network.parameters(),   "lr": network_lr,  "name": "network"},
             {"params": model.backbone.density_net.parameters(),   "lr": network_lr,  "name": "density"},
             {"params": model.backbone.color_net.parameters(),     "lr": network_lr,    "name": "color"},
             # {"params": model.backbone.density_color_net.parameters(),     "lr": network_lr,    "name": "color"},

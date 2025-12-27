@@ -19,7 +19,7 @@ class AlphaBlendTiledRender(torch.autograd.Function):
                                   render_grid.image_width, 4), 
                                  device=device)
         xyzd_img = torch.zeros((render_grid.image_height, 
-                                  render_grid.image_width, 4), 
+                                render_grid.image_width, 4), 
                                  device=device)
         n_contributors = torch.zeros((render_grid.image_height, 
                                       render_grid.image_width, 1),
@@ -31,6 +31,11 @@ class AlphaBlendTiledRender(torch.autograd.Function):
             f' {render_grid.tile_height}x{render_grid.tile_width} configuration, available configurations:'
             f' {slang_modules.alpha_blend_shaders_interp.keys()}'
         )
+
+        assert(len(ray_jitter.shape) == 3)
+        assert(ray_jitter.shape[0] == render_grid.image_height)
+        assert(ray_jitter.shape[1] == render_grid.image_width)
+        assert(ray_jitter.shape[2] == 2)
 
         alpha_blend_tile_shader = slang_modules.alpha_blend_shaders_interp[(render_grid.tile_height, render_grid.tile_width)]
         st = time.time()
