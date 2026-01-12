@@ -23,7 +23,10 @@ from models.base_model import BaseModel
 from utils.ingp_util import grid_scale, compute_grid_offsets
 from utils.hashgrid import HashEmbedderOptimized
 from utils import hashgrid
-import tinycudann as tcnn
+try:
+    import tinycudann as tcnn
+except ImportError:
+    tcnn = None
 import time
 
 torch.set_float32_matmul_precision('high')
@@ -128,6 +131,8 @@ class iNGPDW(nn.Module):
             log2_hashmap_size=log2_hashmap_size,
         )
         if use_tcnn:
+            if tcnn is None:
+                raise ImportError("tinycudann is not installed. Please install it by running: pip install tinycudann")
             self.encoding = tcnn.Encoding(3, self.config)
             print("Using TCNN")
             self.compile = False
