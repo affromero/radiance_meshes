@@ -13,7 +13,28 @@ import torch
 from data import loader
 import random
 import time
-from tqdm import tqdm
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    TaskProgressColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
+)
+
+progress = Progress(
+    SpinnerColumn(),
+    TextColumn("[bold blue]{task.description}"),
+    BarColumn(),
+    TaskProgressColumn(),
+    MofNCompleteColumn(),
+    TimeElapsedColumn(),
+    TimeRemainingColumn(),
+    TextColumn("{task.fields[metrics]}"),
+    refresh_per_second=4,
+)
 import numpy as np
 from utils import cam_util
 from utils.train_util import render, pad_image2even, pad_hw2even, SimpleSampler
@@ -135,7 +156,7 @@ args.ckpt_interval = 5000  # Save checkpoint every N iterations (0 to disable)
 args.ckpt_save_ply = True  # Also save PLY file with intermediate checkpoints
 
 # WandB Settings
-args.wandb = True  # Enable wandb logging
+args.wandb = False  # Enable wandb logging
 args.wandb_project = "radiance-meshes"  # WandB project name
 args.wandb_name = ""  # WandB run name (empty = auto-generated)
 args.wandb_log_interval = 100  # Log metrics every N iterations
@@ -154,10 +175,27 @@ if args.wandb:
         config=args.as_dict(),
         dir=str(args.output_path),
     )
+    # Log key training parameters to summary for visibility
+    wandb.run.summary["total_iterations"] = args.iterations
+    wandb.run.summary["vertices_lr"] = args.vertices_lr
+    wandb.run.summary["encoding_lr"] = args.encoding_lr
+    wandb.run.summary["network_lr"] = args.network_lr
     print(f"WandB initialized: {wandb.run.url}")
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval, resolution=args.resolution)
+
+# Log dataset info to wandb after loading
+if args.wandb:
+    wandb.run.summary["dataset/num_train_cameras"] = len(train_cameras)
+    wandb.run.summary["dataset/num_test_cameras"] = len(test_cameras)
+    wandb.run.summary["dataset/num_points"] = len(scene_info.point_cloud.points) if scene_info.point_cloud else 0
+    if len(train_cameras) > 0:
+        wandb.run.summary["dataset/image_width"] = train_cameras[0].image_width
+        wandb.run.summary["dataset/image_height"] = train_cameras[0].image_height
+    # Loss weights
+    wandb.run.summary["loss/lambda_ssim"] = args.lambda_ssim
+    wandb.run.summary["loss/lambda_dist"] = args.lambda_dist
 
 np.savetxt(str(args.output_path / "transform.txt"), scene_info.transform)
 
@@ -210,9 +248,13 @@ densification_sampler = SimpleSampler(len(train_cameras), args.num_samples, devi
 video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), 30,
                                pad_hw2even(sample_camera.image_width, sample_camera.image_height))
 
-progress_bar = tqdm(range(args.iterations))
 torch.cuda.empty_cache()
-for iteration in progress_bar:
+
+# Start training progress (using global progress instance)
+progress.start()
+task = progress.add_task("Training", total=args.iterations, metrics="")
+
+for iteration in range(args.iterations):
     do_delaunay = iteration % args.delaunay_interval == 0 and iteration < args.freeze_start
     do_freeze = iteration == args.freeze_start
     do_cloning = iteration in dschedule
@@ -343,26 +385,38 @@ for iteration in progress_bar:
 
     disp_ind = max(len(psnrs)-2, 0)
     avg_psnr = sum(psnrs[disp_ind]) / max(len(psnrs[disp_ind]), 1)
-    progress_bar.set_postfix({
-        "PSNR": repr(f"{psnr:>5.2f}"),
-        "Mean": repr(f"{avg_psnr:>5.2f}"),
-        "#V": len(model),
-        "#T": model.indices.shape[0],
-        "DL": repr(f"{dl_loss:>5.2f}"),
-    })
+    metrics_str = f"PSNR={psnr:.2f} Mean={avg_psnr:.2f} #V={len(model)} #T={model.indices.shape[0]} DL={dl_loss:.2f}"
+    progress.update(task, advance=1, metrics=metrics_str)
 
     # WandB logging
     if args.wandb and (iteration + 1) % args.wandb_log_interval == 0:
+        # GPU memory stats
+        gpu_mem_allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+        gpu_mem_reserved = torch.cuda.memory_reserved() / 1024**3  # GB
+
         wandb.log({
+            # Losses
             "train/loss": loss.item(),
             "train/l1_loss": l1_loss.item(),
             "train/l2_loss": l2_loss.item(),
             "train/ssim_loss": ssim_loss.item(),
             "train/distortion_loss": dl_loss.item(),
+            # Metrics
             "train/psnr": psnr,
             "train/avg_psnr": avg_psnr,
+            "train/iteration": iteration + 1,
+            # Model stats
             "model/num_vertices": len(model),
             "model/num_tetrahedra": model.indices.shape[0],
+            "model/scene_scaling": model.scene_scaling,
+            "model/alpha": model.alpha,
+            # Learning rates
+            "lr/vertices": tet_optim.vertices_lr,
+            "lr/network": tet_optim.net_optim.param_groups[0]['lr'],
+            "lr/encoding": tet_optim.optim.param_groups[0]['lr'],
+            # GPU memory
+            "system/gpu_memory_allocated_gb": gpu_mem_allocated,
+            "system/gpu_memory_reserved_gb": gpu_mem_reserved,
         }, step=iteration + 1)
 
     # Save intermediate checkpoint and WandB images (same interval)
@@ -397,6 +451,8 @@ for iteration in progress_bar:
                         rendered, caption=f"iter_{iteration + 1}"),
                 }, step=iteration + 1)
 
+progress.stop()
+
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 video_writer.release()
 
@@ -428,12 +484,16 @@ if args.wandb:
 with torch.no_grad():
     epath = cam_util.generate_cam_path(train_cameras, 400)
     eimages = []
-    for camera in tqdm(epath):
+    progress.start()
+    render_task = progress.add_task("Rendering rotating video", total=len(epath), metrics="")
+    for camera in epath:
         render_pkg = render(camera, model, min_t=min_t, tile_size=args.tile_size)
         image = render_pkg['render']
         image = image.permute(1, 2, 0)
         image = image.detach().cpu().numpy()
         eimages.append(pad_image2even(image))
+        progress.update(render_task, advance=1)
+    progress.stop()
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)
 
 # Log rotating video to WandB
