@@ -136,7 +136,7 @@ def load_dataset(source_path, images_folder, data_device, eval, white_background
         print("Found transforms_train.json file, assuming Blender data set!")
         scene_info = sceneLoadTypeCallbacks["Blender"](source_path, white_background, eval)
     else:
-        assert False, "Could not recognize scene type!"
+        assert False, f"Could not recognize scene type! - {source_path=}, {images_folder=}, {eval=}"
 
 
     train_cameras = load_cameras(scene_info.train_cameras, resolution_scale, resolution, data_device)

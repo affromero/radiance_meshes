@@ -34,6 +34,7 @@ from utils.densification import collect_render_stats, apply_densification
 import mediapy
 from utils.graphics_utils import calculate_norm_loss, depth_to_normals
 from icecream import ic
+import wandb
 
 torch.set_num_threads(1)
 
@@ -129,10 +130,31 @@ args.ablate_gradient = False
 args.ablate_circumsphere = True
 args.ablate_downweighing = False
 
+# Checkpoint Settings
+args.ckpt_interval = 5000  # Save checkpoint every N iterations (0 to disable)
+args.ckpt_save_ply = True  # Also save PLY file with intermediate checkpoints
+
+# WandB Settings
+args.wandb = True  # Enable wandb logging
+args.wandb_project = "radiance-meshes"  # WandB project name
+args.wandb_name = ""  # WandB run name (empty = auto-generated)
+args.wandb_log_interval = 100  # Log metrics every N iterations
+
 
 args = Args.from_namespace(args.get_parser().parse_args())
 
 args.output_path.mkdir(exist_ok=True, parents=True)
+
+# Initialize WandB
+if args.wandb:
+    wandb_name = args.wandb_name if args.wandb_name else args.output_path.name
+    wandb.init(
+        project=args.wandb_project,
+        name=wandb_name,
+        config=args.as_dict(),
+        dir=str(args.output_path),
+    )
+    print(f"WandB initialized: {wandb.run.url}")
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval, resolution=args.resolution)
@@ -329,6 +351,52 @@ for iteration in progress_bar:
         "DL": repr(f"{dl_loss:>5.2f}"),
     })
 
+    # WandB logging
+    if args.wandb and (iteration + 1) % args.wandb_log_interval == 0:
+        wandb.log({
+            "train/loss": loss.item(),
+            "train/l1_loss": l1_loss.item(),
+            "train/l2_loss": l2_loss.item(),
+            "train/ssim_loss": ssim_loss.item(),
+            "train/distortion_loss": dl_loss.item(),
+            "train/psnr": psnr,
+            "train/avg_psnr": avg_psnr,
+            "model/num_vertices": len(model),
+            "model/num_tetrahedra": model.indices.shape[0],
+        }, step=iteration + 1)
+
+    # Save intermediate checkpoint and WandB images (same interval)
+    if args.ckpt_interval > 0 and (iteration + 1) % args.ckpt_interval == 0:
+        ckpt_path = args.output_path / f"ckpt_iter{iteration + 1}.pth"
+        sd = model.state_dict()
+        sd['indices'] = model.indices
+        sd['empty_indices'] = model.empty_indices
+        sd['iteration'] = iteration + 1
+        torch.save(sd, ckpt_path)
+        print(f"\nSaved checkpoint at iteration {iteration + 1} to {ckpt_path}")
+        if args.ckpt_save_ply:
+            ply_path = args.output_path / f"ckpt_iter{iteration + 1}.ply"
+            model.save2ply(ply_path)
+            print(f"Saved PLY at iteration {iteration + 1} to {ply_path}")
+
+        # WandB sample images at checkpoint intervals
+        if args.wandb:
+            with torch.no_grad():
+                render_pkg = render(
+                    sample_camera, model, min_t=min_t, tile_size=args.tile_size)
+                rendered = render_pkg['render'].permute(1, 2, 0)
+                rendered = (rendered.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+                gt = sample_camera.original_image.permute(1, 2, 0)
+                gt = (gt.cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+                # Side-by-side comparison
+                comparison = np.concatenate([gt, rendered], axis=1)
+                wandb.log({
+                    "samples/comparison": wandb.Image(
+                        comparison, caption=f"GT | Render @ iter {iteration + 1}"),
+                    "samples/render": wandb.Image(
+                        rendered, caption=f"iter_{iteration + 1}"),
+                }, step=iteration + 1)
+
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 video_writer.release()
 
@@ -342,11 +410,20 @@ else:
 results = test_util.evaluate_and_save(model, splits, args.output_path, args.tile_size, min_t)
 
 with (args.output_path / "results.json").open("w") as f:
-    all_data = dict(
-        psnr = avged_psnrs[-1] if len(avged_psnrs) > 0 else 0,
+    all_data = {
+        "psnr": avged_psnrs[-1] if len(avged_psnrs) > 0 else 0,
         **results
-    )
+    }
     json.dump(all_data, f, cls=CustomEncoder)
+
+# Log final results to WandB
+if args.wandb:
+    wandb.log({
+        "final/psnr": all_data.get("psnr", 0),
+        "final/num_vertices": len(model),
+        "final/num_tetrahedra": model.indices.shape[0],
+        **{f"final/{k}": v for k, v in results.items() if isinstance(v, (int, float))}
+    })
 
 with torch.no_grad():
     epath = cam_util.generate_cam_path(train_cameras, 400)
@@ -359,8 +436,22 @@ with torch.no_grad():
         eimages.append(pad_image2even(image))
 mediapy.write_video(args.output_path / "rotating.mp4", eimages)
 
+# Log rotating video to WandB
+if args.wandb:
+    wandb.log({
+        "final/rotating_video": wandb.Video(
+            str(args.output_path / "rotating.mp4"),
+            fps=30,
+            format="mp4"
+        )
+    })
+
 model.save2ply(args.output_path / "ckpt.ply")
 sd = model.state_dict()
 sd['indices'] = model.indices
 sd['empty_indices'] = model.empty_indices
 torch.save(sd, args.output_path / "ckpt.pth")
+
+# Finish WandB
+if args.wandb:
+    wandb.finish()

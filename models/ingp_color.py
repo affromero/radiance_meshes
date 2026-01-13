@@ -54,7 +54,7 @@ def pad_for_tinycudann(x: torch.Tensor, granularity: int):
         padding_shape[0] = padding_needed
         padding = torch.zeros(padding_shape, dtype=x.dtype, device=x.device)
         x_padded = torch.cat([x, padding], dim=0)
-        
+
         return x_padded, padding_needed
 
 def gaussian_in_circumsphere(cc: torch.Tensor,       # (T,3)
@@ -89,7 +89,7 @@ def approx_erf(x):
   return torch.sign(x) * torch.sqrt(1 - torch.exp(-(4 / torch.pi) * x**2))
 
 class iNGPDW(nn.Module):
-    def __init__(self, 
+    def __init__(self,
                  sh_dim=0,
                  scale_multi=0.5,
                  log2_hashmap_size=16,
@@ -164,7 +164,7 @@ class iNGPDW(nn.Module):
         self.color_net     = mk_head(3)
         self.gradient_net  = mk_head(3)
         self.sh_net        = mk_head(sh_dim)
-        
+
         self.g_init = g_init
         self.s_init = s_init
         self.d_init = d_init
@@ -426,7 +426,22 @@ class Model(BaseModel):
 
         ccenters = torch.stack([c.camera_center.reshape(3) for c in cameras], dim=0).to(device)
         center = ccenters.mean(dim=0)
-        scaling = torch.linalg.norm(ccenters - center.reshape(1, 3), dim=1, ord=torch.inf).max()
+
+        # Compute scaling from camera positions
+        # For single-camera case, this would be 0, so we use point cloud extent instead
+        if len(cameras) > 1:
+            scaling = torch.linalg.norm(ccenters - center.reshape(1, 3), dim=1, ord=torch.inf).max()
+        else:
+            # Single camera: use point cloud extent as scaling
+            vertices_temp = torch.as_tensor(point_cloud.points).float()
+            scaling = torch.linalg.norm(vertices_temp - center.cpu().reshape(1, 3), dim=1, ord=2).max()
+            print(f"Single-camera mode: using point cloud extent for scaling")
+
+        # Ensure scaling is never 0 (fallback to 1.0)
+        if scaling < 1e-6:
+            print(f"Warning: Scene scaling is near-zero ({scaling}), using default 1.0")
+            scaling = torch.tensor(1.0)
+
         print(f"Scene scaling: {scaling}. Center: {center}")
 
         vertices = torch.as_tensor(point_cloud.points).float()
@@ -511,7 +526,7 @@ class Model(BaseModel):
         verts = self.vertices
         for start in range(0, self.indices.shape[0], self.chunk_size):
             end = min(start + self.chunk_size, self.indices.shape[0])
-            
+
             _, density, _, _, _, _ = self.compute_batch_features(verts, self.indices, start, end)
 
             densities.append(density.reshape(-1))
@@ -565,7 +580,7 @@ class Model(BaseModel):
             indices_np = indices_np.numpy()
             indices_np = indices_np[(indices_np < verts.shape[0]).all(axis=1)]
             del prev
-        
+
 
         # Ensure volume is positive
         indices = torch.as_tensor(indices_np).cuda()
@@ -587,12 +602,12 @@ class Model(BaseModel):
         else:
             self.empty_indices = torch.empty((0, 4), dtype=self.indices.dtype, device='cuda')
             # self.mask = torch.ones((self.full_indices.shape[0]), dtype=bool, device='cuda')
-            
+
         torch.cuda.empty_cache()
 
     def __len__(self):
         return self.vertices.shape[0]
-        
+
 
     def compute_weight_decay(self):
         if self.compile:
