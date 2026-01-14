@@ -13,7 +13,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "mediapy>=1.2.4",
     "muon-optimizer",
-    "nvdiffrast",
+    #"nvdiffrast",
     #"opencv-contrib-python>=4.12.0.88",
     "plyfile>=1.1.2",
     "pybind11>=3.0.0",
@@ -32,12 +32,12 @@ dependencies = [
 tinyplypy = { git = "https://github.com/half-potato/tinyplypy" }
 muon-optimizer = { git = "https://github.com/KellerJordan/Muon" }
 #fused-ssim = { git = "https://github.com/rahul-goel/fused-ssim/" }
-gdel3d = { git = "https://github.com/half-potato/pyGDel3D.git" }
+gdel3d = { path = "submodules/pyGDel3D", editable = true }
 nvdiffrast = { git = "https://github.com/NVlabs/nvdiffrast" }
 tinycudann = { git = "https://github.com/NVlabs/tiny-cuda-nn/", subdirectory = "bindings/torch" }
 
 [tool.uv]
-no-build-isolation-package = ["fused-ssim", "tinycudann"]
+no-build-isolation-package = ["fused-ssim", "torch", "torchvision", "gdel3d"]
 
 [tool.uv.extra-build-dependencies]
 fused-ssim = ["setuptools"]
