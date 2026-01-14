@@ -78,6 +78,7 @@ class FrozenTetModel(BaseModel):
         self.frozen = False
         self.linear = False
         self.feature_dim = 7
+        self.alpha = 0.0
 
     def sh_up(self):
         pass
