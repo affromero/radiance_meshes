@@ -1,12 +1,13 @@
 #!/bin/bash
 # Post-build script for radiance_meshes
-# Builds optional CUDA extensions: tiny-cuda-nn (tcnn) and fused-ssim
+# Builds optional CUDA extensions: tiny-cuda-nn (tcnn), fused-ssim, and pyGDel3D
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TCNN_DIR="${SCRIPT_DIR}/submodules/tcnn"
 FUSED_SSIM_DIR="${SCRIPT_DIR}/submodules/fused-ssim"
+GDEL3D_DIR="${SCRIPT_DIR}/submodules/pyGDel3D"
 
 # ------------------------------
 # ARGUMENT PARSING
@@ -14,6 +15,7 @@ FUSED_SSIM_DIR="${SCRIPT_DIR}/submodules/fused-ssim"
 
 BUILD_TCNN=false
 BUILD_FUSED_SSIM=false
+BUILD_GDEL3D=false
 BUILD_ALL=false
 
 show_help() {
@@ -24,6 +26,7 @@ show_help() {
     echo "Options:"
     echo "  --tcnn         Build tiny-cuda-nn PyTorch bindings"
     echo "  --fused-ssim   Build fused-ssim CUDA extension"
+    echo "  --gdel3d       Build pyGDel3D (Delaunay triangulation)"
     echo "  --all          Build all optional extensions"
     echo "  -h, --help     Show this help message"
     echo ""
@@ -49,6 +52,10 @@ while [[ $# -gt 0 ]]; do
             BUILD_FUSED_SSIM=true
             shift
             ;;
+        --gdel3d)
+            BUILD_GDEL3D=true
+            shift
+            ;;
         --all)
             BUILD_ALL=true
             shift
@@ -68,9 +75,10 @@ done
 if [ "$BUILD_ALL" = true ]; then
     BUILD_TCNN=true
     BUILD_FUSED_SSIM=true
+    BUILD_GDEL3D=true
 fi
 
-if [ "$BUILD_TCNN" = false ] && [ "$BUILD_FUSED_SSIM" = false ]; then
+if [ "$BUILD_TCNN" = false ] && [ "$BUILD_FUSED_SSIM" = false ] && [ "$BUILD_GDEL3D" = false ]; then
     echo "No build targets specified. Use --help for usage."
     exit 0
 fi
@@ -146,6 +154,25 @@ build_fused_ssim() {
     echo "Verify with: python -c 'import torch; from fused_ssim_cuda import fusedssim; print(\"OK\")'"
 }
 
+build_gdel3d() {
+    echo ""
+    echo "=== Building pyGDel3D (Delaunay triangulation) ==="
+
+    cd "${GDEL3D_DIR}"
+
+    # Clean previous build artifacts
+    echo "[1/2] Cleaning previous build..."
+    rm -rf build/ *.egg-info 2>/dev/null || true
+
+    # Build and install
+    echo "[2/2] Building pyGDel3D..."
+    python setup.py install
+
+    echo ""
+    echo "=== pyGDel3D build complete ==="
+    echo "Verify with: python -c 'import gdel3d; print(\"OK\")'"
+}
+
 # ------------------------------
 # MAIN
 # ------------------------------
@@ -158,6 +185,10 @@ fi
 
 if [ "$BUILD_FUSED_SSIM" = true ]; then
     build_fused_ssim
+fi
+
+if [ "$BUILD_GDEL3D" = true ]; then
+    build_gdel3d
 fi
 
 echo ""
