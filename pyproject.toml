@@ -5,7 +5,7 @@ description = "Delaunay splatting boooii"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "gdel3d",
+    #"gdel3d", # Installed in post_build.sh
     "open3d",
     "icecream>=2.1.5",
     "imageio>=2.37.0",
@@ -23,7 +23,7 @@ dependencies = [
     "torchaudio",
     "torchvision",
     "tqdm>=4.67.1",
-    #"fused-ssim",
+    #"fused-ssim",  # Installed in post_build.sh
     "termplotlib>=0.3.9",
     #"tinycudann",
 ]
