@@ -411,7 +411,7 @@ for iteration in range(args.iterations):
             "model/scene_scaling": model.scene_scaling,
             "model/alpha": model.alpha,
             # Learning rates
-            "lr/vertices": tet_optim.vertices_lr,
+            "lr/vertices": tet_optim.vertices_lr if isinstance(tet_optim, TetOptimizer) else tet_optim.vertex_lr,
             "lr/network": tet_optim.net_optim.param_groups[0]['lr'],
             "lr/encoding": tet_optim.optim.param_groups[0]['lr'],
             # GPU memory
