@@ -514,4 +514,4 @@ torch.save(sd, args.output_path / "ckpt.pth")
 
 # Finish WandB
 if args.wandb:
-    wandb.finish()
+    wandb.finish(quiet=True)
