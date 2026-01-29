@@ -249,8 +249,7 @@ dschedule = list(range(args.densify_start, args.densify_end, args.densify_interv
 
 densification_sampler = SimpleSampler(len(train_cameras), args.num_samples, device)
 
-video_writer = cv2.VideoWriter(str(args.output_path / "training.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), 30,
-                               pad_hw2even(sample_camera.image_width, sample_camera.image_height))
+training_frames = []
 
 torch.cuda.empty_cache()
 
@@ -334,8 +333,13 @@ for iteration in range(args.iterations):
             sample_image = render_pkg['render']
             sample_image = sample_image.permute(1, 2, 0)
             sample_image = (sample_image.detach().cpu().numpy()*255).clip(min=0, max=255).astype(np.uint8)
-            sample_image = cv2.cvtColor(sample_image, cv2.COLOR_RGB2BGR)
-            video_writer.write(pad_image2even(sample_image))
+            frame = pad_image2even(sample_image)
+            # Add iteration text overlay (white outline + black text for visibility)
+            cv2.putText(frame, f"iter {iteration}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, f"iter {iteration}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 1)
+            training_frames.append(frame)
 
     if do_cloning and not model.frozen:
         with torch.no_grad():
@@ -439,7 +443,7 @@ for iteration in range(args.iterations):
 
         # Render validation video at checkpoint
         with torch.no_grad():
-            ckpt_epath = cam_util.generate_cam_path(train_cameras, len(train_cameras) * 4)
+            ckpt_epath = cam_util.generate_cam_path(train_cameras, len(train_cameras))
             ckpt_images = []
             for camera in ckpt_epath:
                 render_pkg = render(camera, model, min_t=min_t, tile_size=args.tile_size)
@@ -450,6 +454,11 @@ for iteration in range(args.iterations):
             ckpt_video_path = args.output_path / f"rotating_iter{iteration + 1}.mp4"
             mediapy.write_video(ckpt_video_path, ckpt_images)
             print(f"Saved validation video at iteration {iteration + 1} to {ckpt_video_path}")
+
+            # Write training progress video
+            if len(training_frames) > 0:
+                mediapy.write_video(args.output_path / "training.mp4", training_frames, fps=30)
+                print(f"Updated training video with {len(training_frames)} frames")
 
             # Log to WandB if enabled
             if args.wandb:
@@ -479,8 +488,12 @@ for iteration in range(args.iterations):
 
 progress.stop()
 
+# Write final training video
+if len(training_frames) > 0:
+    mediapy.write_video(args.output_path / "training.mp4", training_frames, fps=30)
+    print(f"Saved final training video with {len(training_frames)} frames")
+
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
-video_writer.release()
 
 torch.cuda.synchronize()
 torch.cuda.empty_cache()
@@ -508,7 +521,7 @@ if args.wandb:
     })
 
 with torch.no_grad():
-    epath = cam_util.generate_cam_path(train_cameras, len(train_cameras) * 4)
+    epath = cam_util.generate_cam_path(train_cameras, len(train_cameras))
     eimages = []
     progress.start()
     render_task = progress.add_task("Rendering rotating video", total=len(epath), metrics="")
