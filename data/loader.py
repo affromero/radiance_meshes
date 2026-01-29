@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from PIL import Image
 
-from data.dataset_readers import sceneLoadTypeCallbacks
+from data.dataset_readers import sceneLoadTypeCallbacks, fetchPly
 from data.camera import Camera
 from data.types import BasicPointCloud
 from tqdm import tqdm
@@ -87,8 +87,8 @@ def load_cam(data_device, resolution, id, cam_info, resolution_scale):
     if resized_image_rgb.shape[0] == 4:
         loaded_mask = resized_image_rgb[3:4, ...]
 
-    return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
-                  fovx=cam_info.fovx, fovy=cam_info.fovy, cx=cam_info.cx, cy=cam_info.cy, 
+    return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T,
+                  fovx=cam_info.fovx, fovy=cam_info.fovy, cx=cam_info.cx, cy=cam_info.cy,
                   image=gt_image, gt_alpha_mask=loaded_mask,
                   image_name=cam_info.image_name, uid=id, data_device=data_device,
                   model=cam_info.model, distortion_params=cam_info.distortion_params,
@@ -129,7 +129,7 @@ def set_pose(camera, T):
     return camera
 
 
-def load_dataset(source_path, images_folder, data_device, eval, white_background=True, resolution_scale=1.0, resolution=-1, apply_pcd=True):
+def load_dataset(source_path, images_folder, data_device, eval, white_background=True, resolution_scale=1.0, resolution=-1, apply_pcd=True, init_ply=None):
     if os.path.exists(os.path.join(source_path, "sparse")):
         scene_info = sceneLoadTypeCallbacks["Colmap"](source_path, images_folder, eval)
     elif os.path.exists(os.path.join(source_path, "transforms_train.json")):
@@ -137,6 +137,12 @@ def load_dataset(source_path, images_folder, data_device, eval, white_background
         scene_info = sceneLoadTypeCallbacks["Blender"](source_path, white_background, eval)
     else:
         assert False, f"Could not recognize scene type! - {source_path=}, {images_folder=}, {eval=}"
+
+    # Override point cloud with init_ply if provided
+    if init_ply is not None and os.path.exists(init_ply):
+        print(f"Loading init PLY from: {init_ply}")
+        init_pcd = fetchPly(init_ply)
+        scene_info = scene_info._replace(point_cloud=init_pcd)
 
 
     train_cameras = load_cameras(scene_info.train_cameras, resolution_scale, resolution, data_device)
