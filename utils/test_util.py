@@ -42,7 +42,7 @@ class bcolors:
 def compare_dict_values(results1, results2, keys_to_compare, vertices=None, viewmat=None, tile_size=None):
     """
     Compare values from two dictionaries, checking for error magnitude and convergence.
-    
+
     Args:
         results1 (dict): First results dictionary (with more samples)
         results2 (dict): Second results dictionary (with fewer samples)
@@ -56,7 +56,7 @@ def compare_dict_values(results1, results2, keys_to_compare, vertices=None, view
     for key1, key2, description, abs_thresh, rel_thresh in keys_to_compare:
         error1 = np.abs(results1[key1] - results1[key2]).mean()
         error2 = np.abs(results2[key1] - results2[key2]).mean()
-        
+
         # Check if error is both large and non-decreasing
         if error1 > abs_thresh and error2 >= error1:
             error_message = (
@@ -71,7 +71,7 @@ def compare_dict_values(results1, results2, keys_to_compare, vertices=None, view
                 error_message += f"\nviewmat = torch.{viewmat}"
             error_message += f"\n{bcolors.FAIL}END MESSAGE{bcolors.ENDC}"
             raise AssertionError(error_message)
-            
+
         try:
             np.testing.assert_allclose(results1[key1], results1[key2], atol=abs_thresh, rtol=rel_thresh)
         except AssertionError as e:
@@ -140,10 +140,10 @@ def evaluate_and_save(model, splits, output_path, tile_size, min_t):
     pred_path = os.path.join(output_path, "images", "pred")
     os.makedirs(gt_path, exist_ok=True)
     os.makedirs(pred_path, exist_ok=True)
-    
+
     # Initialize LPIPS
     lpips_eval = LPIPSEval(net_type='vgg', device='cuda')
-    
+
     short_results = {}
     results = {}
     for split, cameras in splits:
@@ -151,36 +151,36 @@ def evaluate_and_save(model, splits, output_path, tile_size, min_t):
         ssims, psnrs, lpipss = [], [], []
         os.makedirs(os.path.join(gt_path, split), exist_ok=True)
         os.makedirs(os.path.join(pred_path, split), exist_ok=True)
-        
+
         for idx, camera in enumerate(tqdm(cameras, desc=f"Rendering {split} set")):
             with torch.no_grad():
                 with torch.no_grad():
                     render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
                 image = render_pkg['render'].clip(min=0, max=1).unsqueeze(0)
                 # image = image.permute(1, 2, 0).detach()
-                
+
                 # Load corresponding ground truth image
                 gt = camera.original_image.cuda().unsqueeze(0)
-                
+
                 # Compute metrics
                 ssim_val = fused_ssim(image, gt).item()
                 psnr_val = psnr(image, gt).item()
                 lpips_val = lpips_eval.criterion(2 * image - 1, 2 * gt - 1).item()
-                
+
                 # Store results
                 renders.append(image)
                 gts.append(gt)
                 ssims.append(ssim_val)
                 psnrs.append(psnr_val)
                 lpipss.append(lpips_val)
-                
+
                 # Save individual images
                 imageio.imwrite(os.path.join(pred_path, split, f"{idx:04d}.png"), (image.cpu()[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8))
                 imageio.imwrite(os.path.join(gt_path, split, f"{idx:04d}.png"), (gt.cpu()[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8))
-                
+
                 # Save per-image metrics
                 results[f"{split}_{idx:04d}"] = {"SSIM": ssim_val, "PSNR": psnr_val, "LPIPS": lpips_val}
-        
+
         means = {
             "SSIM": torch.tensor(ssims).mean().item(),
             "PSNR": torch.tensor(psnrs).mean().item(),
@@ -193,16 +193,90 @@ def evaluate_and_save(model, splits, output_path, tile_size, min_t):
             f"{split}_PSNR": torch.tensor(psnrs).mean().item(),
             f"{split}_LPIPS": torch.tensor(lpipss).mean().item()
         }
-        
+
         print(f"{split.upper()} SET METRICS:")
         print("  SSIM : {:>12.7f}".format(results[f"{split}_mean"]["SSIM"]))
         print("  PSNR : {:>12.7f}".format(results[f"{split}_mean"]["PSNR"]))
         print("  LPIPS: {:>12.7f}".format(results[f"{split}_mean"]["LPIPS"]))
         print("")
-    
+
     # Save results to JSON
     with open(os.path.join(output_path, "metrics.json"), "w") as f:
         json.dump(results, f, indent=4)
-    
+
     print(f"Metrics saved to {os.path.join(output_path, 'metrics.json')}")
     return short_results
+
+
+def evaluate_at_step(model, test_cameras, output_path, tile_size, min_t, iteration, num_vertices=None):
+    """Evaluate model and save results at a specific training step.
+
+    Saves rendered images to eval_step_{iteration}/ directory for convergence analysis.
+    This matches LichtFeld's output structure for consistent NVS benchmarking.
+
+    Args:
+        model: The radiance mesh model to evaluate.
+        test_cameras: List of test cameras to render.
+        output_path: Base output directory.
+        tile_size: Tile size for rendering.
+        min_t: Minimum t value for ray marching.
+        iteration: Current training iteration.
+        num_vertices: Optional number of vertices/primitives for logging.
+
+    Returns:
+        dict: Metrics including PSNR, SSIM, LPIPS means.
+    """
+    eval_dir = os.path.join(output_path, f"eval_step_{iteration}")
+    os.makedirs(eval_dir, exist_ok=True)
+
+    # Initialize LPIPS (lazily, reuse if already exists)
+    lpips_eval = LPIPSEval(net_type='vgg', device='cuda')
+
+    ssims, psnrs, lpipss = [], [], []
+
+    for idx, camera in enumerate(tqdm(test_cameras, desc=f"Eval step {iteration}")):
+        with torch.no_grad():
+            render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
+            image = render_pkg['render'].clip(min=0, max=1).unsqueeze(0)
+            gt = camera.original_image.cuda().unsqueeze(0)
+
+            # Compute metrics
+            ssim_val = fused_ssim(image, gt).item()
+            psnr_val = psnr(image, gt).item()
+            lpips_val = lpips_eval.criterion(2 * image - 1, 2 * gt - 1).item()
+
+            ssims.append(ssim_val)
+            psnrs.append(psnr_val)
+            lpipss.append(lpips_val)
+
+            # Save rendered image (numbered like LichtFeld: 0.png, 1.png, ...)
+            img_np = (image.cpu()[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            imageio.imwrite(os.path.join(eval_dir, f"{idx}.png"), img_np)
+
+    # Compute mean metrics
+    metrics = {
+        "iteration": iteration,
+        "psnr": torch.tensor(psnrs).mean().item(),
+        "ssim": torch.tensor(ssims).mean().item(),
+        "lpips": torch.tensor(lpipss).mean().item(),
+        "num_images": len(test_cameras),
+    }
+    if num_vertices is not None:
+        metrics["num_vertices"] = num_vertices
+
+    # Save metrics for this step
+    metrics_path = os.path.join(eval_dir, "metrics.json")
+    with open(metrics_path, "w") as f:
+        json.dump(metrics, f, indent=2)
+
+    # Append to convergence CSV (similar to LichtFeld's metrics.csv)
+    csv_path = os.path.join(output_path, "metrics.csv")
+    write_header = not os.path.exists(csv_path)
+    with open(csv_path, "a") as f:
+        if write_header:
+            f.write("iteration,psnr,ssim,lpips,num_vertices\n")
+        n_verts = num_vertices if num_vertices is not None else 0
+        f.write(f"{iteration},{metrics['psnr']:.6f},{metrics['ssim']:.6f},{metrics['lpips']:.6f},{n_verts}\n")
+
+    print(f"Step {iteration}: PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.4f}, LPIPS={metrics['lpips']:.4f}")
+    return metrics

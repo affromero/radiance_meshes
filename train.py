@@ -441,6 +441,20 @@ for iteration in range(args.iterations):
             model.save2ply(ply_path)
             print(f"Saved PLY at iteration {iteration + 1} to {ply_path}")
 
+        # Run evaluation at this checkpoint (saves to eval_step_{N}/ for convergence analysis)
+        if args.eval and len(test_cameras) > 0:
+            step_metrics = test_util.evaluate_at_step(
+                model, test_cameras, args.output_path, args.tile_size, min_t, iteration + 1,
+                num_vertices=len(model)
+            )
+            # Log to WandB if enabled
+            if args.wandb:
+                wandb.log({
+                    f"eval/psnr": step_metrics["psnr"],
+                    f"eval/ssim": step_metrics["ssim"],
+                    f"eval/lpips": step_metrics["lpips"],
+                }, step=iteration + 1)
+
         # Render validation video at checkpoint
         with torch.no_grad():
             ckpt_epath = cam_util.generate_cam_path(train_cameras, len(train_cameras))
