@@ -148,16 +148,25 @@ def evaluate_and_save(model, splits, output_path, tile_size, min_t):
     results = {}
     for split, cameras in splits:
         renders, gts = [], []
-        ssims, psnrs, lpipss = [], [], []
+        ssims, psnrs, lpipss, render_times = [], [], [], []
         os.makedirs(os.path.join(gt_path, split), exist_ok=True)
         os.makedirs(os.path.join(pred_path, split), exist_ok=True)
 
         for idx, camera in enumerate(tqdm(cameras, desc=f"Rendering {split} set")):
             with torch.no_grad():
-                with torch.no_grad():
-                    render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
+                # Time the render call
+                torch.cuda.synchronize()
+                start_time = torch.cuda.Event(enable_timing=True)
+                end_time = torch.cuda.Event(enable_timing=True)
+                start_time.record()
+
+                render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
+
+                end_time.record()
+                torch.cuda.synchronize()
+                render_times.append(start_time.elapsed_time(end_time))
+
                 image = render_pkg['render'].clip(min=0, max=1).unsqueeze(0)
-                # image = image.permute(1, 2, 0).detach()
 
                 # Load corresponding ground truth image
                 gt = camera.original_image.cuda().unsqueeze(0)
@@ -181,23 +190,30 @@ def evaluate_and_save(model, splits, output_path, tile_size, min_t):
                 # Save per-image metrics
                 results[f"{split}_{idx:04d}"] = {"SSIM": ssim_val, "PSNR": psnr_val, "LPIPS": lpips_val}
 
+        # Compute FPS from render times
+        avg_render_time_ms = sum(render_times) / len(render_times) if render_times else 0
+        fps = 1000.0 / avg_render_time_ms if avg_render_time_ms > 0 else 0.0
+
         means = {
             "SSIM": torch.tensor(ssims).mean().item(),
             "PSNR": torch.tensor(psnrs).mean().item(),
-            "LPIPS": torch.tensor(lpipss).mean().item()
+            "LPIPS": torch.tensor(lpipss).mean().item(),
+            "FPS": fps,
         }
         # Compute mean metrics
         results[f"{split}_mean"] = means
         short_results = {**short_results,
             f"{split}_SSIM": torch.tensor(ssims).mean().item(),
             f"{split}_PSNR": torch.tensor(psnrs).mean().item(),
-            f"{split}_LPIPS": torch.tensor(lpipss).mean().item()
+            f"{split}_LPIPS": torch.tensor(lpipss).mean().item(),
+            f"{split}_FPS": fps,
         }
 
         print(f"{split.upper()} SET METRICS:")
         print("  SSIM : {:>12.7f}".format(results[f"{split}_mean"]["SSIM"]))
         print("  PSNR : {:>12.7f}".format(results[f"{split}_mean"]["PSNR"]))
         print("  LPIPS: {:>12.7f}".format(results[f"{split}_mean"]["LPIPS"]))
+        print("  FPS  : {:>12.2f}".format(fps))
         print("")
 
     # Save results to JSON
@@ -232,11 +248,22 @@ def evaluate_at_step(model, test_cameras, output_path, tile_size, min_t, iterati
     # Initialize LPIPS (lazily, reuse if already exists)
     lpips_eval = LPIPSEval(net_type='vgg', device='cuda')
 
-    ssims, psnrs, lpipss = [], [], []
+    ssims, psnrs, lpipss, render_times = [], [], [], []
 
     for idx, camera in enumerate(tqdm(test_cameras, desc=f"Eval step {iteration}")):
         with torch.no_grad():
+            # Time the render call
+            torch.cuda.synchronize()
+            start_time = torch.cuda.Event(enable_timing=True)
+            end_time = torch.cuda.Event(enable_timing=True)
+            start_time.record()
+
             render_pkg = render(camera, model, tile_size=tile_size, min_t=min_t)
+
+            end_time.record()
+            torch.cuda.synchronize()
+            render_times.append(start_time.elapsed_time(end_time))
+
             image = render_pkg['render'].clip(min=0, max=1).unsqueeze(0)
             gt = camera.original_image.cuda().unsqueeze(0)
 
@@ -254,11 +281,16 @@ def evaluate_at_step(model, test_cameras, output_path, tile_size, min_t, iterati
             imageio.imwrite(os.path.join(eval_dir, f"{idx}.png"), img_np)
 
     # Compute mean metrics
+    avg_render_time_ms = sum(render_times) / len(render_times)
+    fps = 1000.0 / avg_render_time_ms if avg_render_time_ms > 0 else 0.0
+
     metrics = {
         "iteration": iteration,
         "psnr": torch.tensor(psnrs).mean().item(),
         "ssim": torch.tensor(ssims).mean().item(),
         "lpips": torch.tensor(lpipss).mean().item(),
+        "fps": fps,
+        "render_time_ms": avg_render_time_ms,
         "num_images": len(test_cameras),
     }
     if num_vertices is not None:
@@ -274,9 +306,9 @@ def evaluate_at_step(model, test_cameras, output_path, tile_size, min_t, iterati
     write_header = not os.path.exists(csv_path)
     with open(csv_path, "a") as f:
         if write_header:
-            f.write("iteration,psnr,ssim,lpips,num_vertices\n")
+            f.write("iteration,psnr,ssim,lpips,fps,num_vertices\n")
         n_verts = num_vertices if num_vertices is not None else 0
-        f.write(f"{iteration},{metrics['psnr']:.6f},{metrics['ssim']:.6f},{metrics['lpips']:.6f},{n_verts}\n")
+        f.write(f"{iteration},{metrics['psnr']:.6f},{metrics['ssim']:.6f},{metrics['lpips']:.6f},{fps:.2f},{n_verts}\n")
 
-    print(f"Step {iteration}: PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.4f}, LPIPS={metrics['lpips']:.4f}")
+    print(f"Step {iteration}: PSNR={metrics['psnr']:.2f}, SSIM={metrics['ssim']:.4f}, LPIPS={metrics['lpips']:.4f}, FPS={fps:.1f}")
     return metrics

@@ -5,6 +5,15 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}/../.."
+
+# Use venv python if available
+if [ -f "${ROOT_DIR}/.venv/bin/python" ]; then
+    PYTHON="${ROOT_DIR}/.venv/bin/python"
+else
+    PYTHON="python"
+fi
+
 TCNN_DIR="${SCRIPT_DIR}/submodules/tcnn"
 FUSED_SSIM_DIR="${SCRIPT_DIR}/submodules/fused-ssim"
 GDEL3D_DIR="${SCRIPT_DIR}/submodules/pyGDel3D"
@@ -17,6 +26,7 @@ BUILD_TCNN=false
 BUILD_FUSED_SSIM=false
 BUILD_GDEL3D=false
 BUILD_ALL=false
+FORCE_REBUILD=false
 
 show_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -28,6 +38,7 @@ show_help() {
     echo "  --fused-ssim   Build fused-ssim CUDA extension"
     echo "  --gdel3d       Build pyGDel3D (Delaunay triangulation)"
     echo "  --all          Build all optional extensions"
+    echo "  --force, -f    Force rebuild by cleaning build directories"
     echo "  -h, --help     Show this help message"
     echo ""
     echo "Examples:"
@@ -35,6 +46,13 @@ show_help() {
     echo "  $0 --tcnn                   # Build only tcnn"
     echo "  $0 --fused-ssim             # Build only fused-ssim"
     echo "  $0 --tcnn --fused-ssim      # Build both explicitly"
+    echo "  $0 --all --force            # Force rebuild everything"
+    echo ""
+    echo "Troubleshooting:"
+    echo "  If you encounter JIT compilation hangs or 'baton.wait()' errors,"
+    echo "  clear the torch extensions cache:"
+    echo "    rm -rf ~/.cache/torch_extensions/"
+    echo ""
 }
 
 if [ $# -eq 0 ]; then
@@ -58,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --all)
             BUILD_ALL=true
+            shift
+            ;;
+        --force|-f)
+            FORCE_REBUILD=true
             shift
             ;;
         -h|--help)
@@ -106,6 +128,7 @@ find_cuda() {
     fi
 
     echo "Using CUDA: ${CUDA_PATH}"
+    echo "Using Python: ${PYTHON}"
     export PATH="${CUDA_PATH}/bin:${PATH}"
     export LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
 }
@@ -119,16 +142,20 @@ build_tcnn() {
     echo "=== Building tiny-cuda-nn PyTorch bindings ==="
 
     # Initialize git submodules (tcnn has nested dependencies)
-    echo "[1/2] Initializing tcnn submodules..."
+    echo "[1/3] Initializing tcnn submodules..."
     cd "${TCNN_DIR}"
     git submodule update --init --recursive
 
     # Build and install tcnn PyTorch bindings
-    echo "[2/2] Building tcnn PyTorch bindings..."
     cd "${TCNN_DIR}/bindings/torch"
-    rm -rf build/ *.egg-info src/*.o 2>/dev/null || true
 
-    python setup.py install
+    if [ "$FORCE_REBUILD" = true ]; then
+        echo "[2/3] Cleaning previous build..."
+        rm -rf build/ *.egg-info src/*.o 2>/dev/null || true
+    fi
+
+    echo "[3/3] Building tcnn PyTorch bindings..."
+    $PYTHON setup.py install
 
     echo ""
     echo "=== tiny-cuda-nn build complete ==="
@@ -141,13 +168,13 @@ build_fused_ssim() {
 
     cd "${FUSED_SSIM_DIR}"
 
-    # Clean previous build artifacts
-    echo "[1/2] Cleaning previous build..."
-    rm -rf build/ *.egg-info 2>/dev/null || true
+    if [ "$FORCE_REBUILD" = true ]; then
+        echo "[1/2] Cleaning previous build..."
+        rm -rf build/ *.egg-info 2>/dev/null || true
+    fi
 
-    # Build and install
     echo "[2/2] Building fused-ssim..."
-    python setup.py install
+    $PYTHON setup.py install
 
     echo ""
     echo "=== fused-ssim build complete ==="
@@ -160,13 +187,13 @@ build_gdel3d() {
 
     cd "${GDEL3D_DIR}"
 
-    # Clean previous build artifacts
-    echo "[1/2] Cleaning previous build..."
-    rm -rf build/ *.egg-info 2>/dev/null || true
+    if [ "$FORCE_REBUILD" = true ]; then
+        echo "[1/2] Cleaning previous build..."
+        rm -rf build/ *.egg-info 2>/dev/null || true
+    fi
 
-    # Build and install
     echo "[2/2] Building pyGDel3D..."
-    python setup.py install
+    $PYTHON setup.py install
 
     echo ""
     echo "=== pyGDel3D build complete ==="

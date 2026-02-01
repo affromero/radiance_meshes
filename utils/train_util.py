@@ -171,6 +171,171 @@ class SpikingLR:
         height = self.peak_height_fn(peak_ind) - self.base_function(peak_ind)
         return base_f + self.peak_fn(last_peak, height)
 
+
+class ReduceLROnPlateau:
+    """Reduce learning rate when a metric has stopped improving.
+
+    Similar to PyTorch's ReduceLROnPlateau but works with our custom optimizers.
+
+    Args:
+        factor: Factor to multiply LR by when plateau detected (default: 0.5)
+        patience: Number of evaluations without improvement before reducing LR
+        min_lr: Minimum learning rate floor
+        threshold: Minimum improvement to count as "better" (relative)
+        cooldown: Evaluations to wait after LR reduction before resuming monitoring
+        mode: 'max' for metrics where higher is better (PSNR, SSIM)
+    """
+
+    def __init__(
+        self,
+        factor: float = 0.5,
+        patience: int = 3,
+        min_lr: float = 1e-7,
+        threshold: float = 0.01,
+        cooldown: int = 0,
+        mode: str = "max",
+    ):
+        self.factor = factor
+        self.patience = patience
+        self.min_lr = min_lr
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self.mode = mode
+
+        self.best_metric = None
+        self.bad_evals = 0
+        self.cooldown_counter = 0
+        self.lr_scale = 1.0  # Cumulative scale factor
+
+    def is_better(self, current: float, best: float) -> bool:
+        """Check if current metric is better than best."""
+        if self.mode == "max":
+            return current > best * (1 + self.threshold)
+        else:
+            return current < best * (1 - self.threshold)
+
+    def step(self, metric: float) -> bool:
+        """Update scheduler with new metric value.
+
+        Args:
+            metric: Current evaluation metric (e.g., PSNR)
+
+        Returns:
+            True if learning rate was reduced, False otherwise
+        """
+        # Initialize best metric on first call
+        if self.best_metric is None:
+            self.best_metric = metric
+            return False
+
+        # In cooldown period after LR reduction
+        if self.cooldown_counter > 0:
+            self.cooldown_counter -= 1
+            return False
+
+        # Check if metric improved
+        if self.is_better(metric, self.best_metric):
+            self.best_metric = metric
+            self.bad_evals = 0
+            return False
+
+        # No improvement
+        self.bad_evals += 1
+
+        # Check if patience exceeded
+        if self.bad_evals >= self.patience:
+            self.lr_scale *= self.factor
+            self.bad_evals = 0
+            self.cooldown_counter = self.cooldown
+            print(f"[ReduceLROnPlateau] Reducing LR by {self.factor}x "
+                  f"(total scale: {self.lr_scale:.4f}, best: {self.best_metric:.2f})")
+            return True
+
+        return False
+
+    def get_lr_scale(self) -> float:
+        """Get cumulative LR scale factor."""
+        return max(self.lr_scale, self.min_lr)
+
+    def state_dict(self) -> dict:
+        """Get scheduler state for checkpointing."""
+        return {
+            "best_metric": self.best_metric,
+            "bad_evals": self.bad_evals,
+            "cooldown_counter": self.cooldown_counter,
+            "lr_scale": self.lr_scale,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        """Load scheduler state from checkpoint."""
+        self.best_metric = state["best_metric"]
+        self.bad_evals = state["bad_evals"]
+        self.cooldown_counter = state["cooldown_counter"]
+        self.lr_scale = state["lr_scale"]
+
+
+class BestCheckpointTracker:
+    """Track and save the best model checkpoint based on a metric.
+
+    Args:
+        output_path: Directory to save checkpoints
+        mode: 'max' for metrics where higher is better (PSNR, SSIM)
+    """
+
+    def __init__(self, output_path, mode: str = "max"):
+        self.output_path = output_path
+        self.mode = mode
+        self.best_metric = None
+        self.best_iteration = None
+
+    def is_better(self, current: float, best: float) -> bool:
+        """Check if current metric is better than best."""
+        if self.mode == "max":
+            return current > best
+        else:
+            return current < best
+
+    def update(self, metric: float, iteration: int, model, save_ply: bool = True) -> bool:
+        """Update tracker and save if this is the best checkpoint.
+
+        Args:
+            metric: Current evaluation metric
+            iteration: Current iteration
+            model: Model to save
+            save_ply: Also save PLY file
+
+        Returns:
+            True if this was the best checkpoint, False otherwise
+        """
+        import torch
+
+        is_best = self.best_metric is None or self.is_better(metric, self.best_metric)
+
+        if is_best:
+            old_best = self.best_metric
+            self.best_metric = metric
+            self.best_iteration = iteration
+
+            # Save best checkpoint
+            ckpt_path = self.output_path / "ckpt_best.pth"
+            sd = model.state_dict()
+            sd['indices'] = model.indices
+            sd['empty_indices'] = model.empty_indices
+            sd['iteration'] = iteration
+            sd['best_metric'] = metric
+            torch.save(sd, ckpt_path)
+
+            if save_ply:
+                ply_path = self.output_path / "ckpt_best.ply"
+                model.save2ply(ply_path)
+
+            improvement = "" if old_best is None else f" (+{metric - old_best:.2f})"
+            print(f"[Best Checkpoint] New best at iter {iteration}: "
+                  f"{metric:.2f}{improvement} -> {ckpt_path}")
+
+        return is_best
+
+
 class SimpleSampler:
     def __init__(self, total_num_samples, batch_size, device):
         self.total_num_samples = total_num_samples

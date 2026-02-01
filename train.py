@@ -37,7 +37,7 @@ progress = Progress(
 )
 import numpy as np
 from utils import cam_util
-from utils.train_util import render, pad_image2even, pad_hw2even, SimpleSampler
+from utils.train_util import render, pad_image2even, pad_hw2even, SimpleSampler, ReduceLROnPlateau, BestCheckpointTracker
 # from models.vertex_color import Model, TetOptimizer
 from models.ingp_color import Model, TetOptimizer
 # from models.frozen import FrozenTetModel as Model
@@ -70,12 +70,14 @@ args = Args()
 args.tile_size = 4
 args.image_folder = "images_2"
 args.eval = False
+args.llffhold = 8  # Use every Nth image for testing (test_every)
 args.dataset_path = Path("/optane/nerf_datasets/360/bonsai")
 args.output_path = Path("output/test/")
 args.iterations = 30000
 args.ckpt = ""
 args.resolution = 1
 args.render_train = False
+args.eval_steps = ""  # Comma-separated list of iterations for evaluation (e.g., "5000,10000,20000")
 
 # Light Settings
 args.max_sh_deg = 3
@@ -155,6 +157,13 @@ args.ablate_downweighing = False
 args.ckpt_interval = 5000  # Save checkpoint every N iterations (0 to disable)
 args.ckpt_save_ply = True  # Also save PLY file with intermediate checkpoints
 
+# LR Scheduling Settings
+args.lr_plateau_factor = 0.5  # Factor to reduce LR by when plateau detected
+args.lr_plateau_patience = 3  # Evaluations without improvement before reducing LR
+args.lr_plateau_min = 1e-7  # Minimum LR floor
+args.lr_plateau_threshold = 0.01  # Min improvement to count as better (relative)
+args.track_best_checkpoint = True  # Save best checkpoint based on PSNR
+
 # WandB Settings
 args.wandb = False  # Enable wandb logging
 args.wandb_project = "radiance-meshes"  # WandB project name
@@ -187,7 +196,12 @@ if args.wandb:
 
 train_cameras, test_cameras, scene_info = loader.load_dataset(
     args.dataset_path, args.image_folder, data_device=args.data_device, eval=args.eval, resolution=args.resolution,
-    init_ply=args.init_ply if args.init_ply else None)
+    init_ply=args.init_ply if args.init_ply else None, llffhold=args.llffhold)
+
+# Parse eval_steps if provided (comma-separated list of iterations)
+eval_steps_set = set()
+if args.eval_steps:
+    eval_steps_set = {int(s.strip()) for s in args.eval_steps.split(",") if s.strip()}
 
 # Log dataset info to wandb after loading
 if args.wandb:
@@ -250,6 +264,16 @@ dschedule = list(range(args.densify_start, args.densify_end, args.densify_interv
 densification_sampler = SimpleSampler(len(train_cameras), args.num_samples, device)
 
 training_frames = []
+
+# Initialize LR scheduler and best checkpoint tracker
+lr_scheduler = ReduceLROnPlateau(
+    factor=args.lr_plateau_factor,
+    patience=args.lr_plateau_patience,
+    min_lr=args.lr_plateau_min,
+    threshold=args.lr_plateau_threshold,
+    mode="max",  # PSNR: higher is better
+)
+best_tracker = BestCheckpointTracker(args.output_path, mode="max") if args.track_best_checkpoint else None
 
 torch.cuda.empty_cache()
 
@@ -427,8 +451,10 @@ for iteration in range(args.iterations):
             "system/gpu_memory_reserved_gb": gpu_mem_reserved,
         }, step=iteration + 1)
 
-    # Save intermediate checkpoint and WandB images (same interval)
-    if args.ckpt_interval > 0 and (iteration + 1) % args.ckpt_interval == 0:
+    # Save intermediate checkpoint and WandB images at ckpt_interval OR eval_steps
+    do_checkpoint = args.ckpt_interval > 0 and (iteration + 1) % args.ckpt_interval == 0
+    do_eval_step = (iteration + 1) in eval_steps_set
+    if do_checkpoint or do_eval_step:
         ckpt_path = args.output_path / f"ckpt_iter{iteration + 1}.pth"
         sd = model.state_dict()
         sd['indices'] = model.indices
@@ -447,12 +473,33 @@ for iteration in range(args.iterations):
                 model, test_cameras, args.output_path, args.tile_size, min_t, iteration + 1,
                 num_vertices=len(model)
             )
+
+            # Update LR scheduler based on PSNR
+            eval_psnr = step_metrics["psnr"]
+            lr_reduced = lr_scheduler.step(eval_psnr)
+            if lr_reduced:
+                # Apply LR scale to all optimizers
+                lr_scale = lr_scheduler.get_lr_scale()
+                for param_group in tet_optim.net_optim.param_groups:
+                    param_group['lr'] *= args.lr_plateau_factor
+                for param_group in tet_optim.optim.param_groups:
+                    param_group['lr'] *= args.lr_plateau_factor
+                if hasattr(tet_optim, 'vertex_optim'):
+                    for param_group in tet_optim.vertex_optim.param_groups:
+                        param_group['lr'] *= args.lr_plateau_factor
+
+            # Update best checkpoint tracker
+            if best_tracker is not None:
+                best_tracker.update(eval_psnr, iteration + 1, model, save_ply=args.ckpt_save_ply)
+
             # Log to WandB if enabled
             if args.wandb:
                 wandb.log({
                     f"eval/psnr": step_metrics["psnr"],
                     f"eval/ssim": step_metrics["ssim"],
                     f"eval/lpips": step_metrics["lpips"],
+                    f"eval/best_psnr": lr_scheduler.best_metric or 0,
+                    f"lr/scale": lr_scheduler.get_lr_scale(),
                 }, step=iteration + 1)
 
         # Render validation video at checkpoint
@@ -506,6 +553,13 @@ progress.stop()
 if len(training_frames) > 0:
     mediapy.write_video(args.output_path / "training.mp4", training_frames, fps=30)
     print(f"Saved final training video with {len(training_frames)} frames")
+
+# Print best checkpoint summary
+if best_tracker is not None and best_tracker.best_metric is not None:
+    print(f"\n[Training Summary]")
+    print(f"  Best PSNR: {best_tracker.best_metric:.2f} (at iteration {best_tracker.best_iteration})")
+    print(f"  Final LR scale: {lr_scheduler.get_lr_scale():.4f}")
+    print(f"  Best checkpoint: {args.output_path / 'ckpt_best.pth'}")
 
 avged_psnrs = [sum(v)/len(v) for v in psnrs if len(v) == len(train_cameras)]
 

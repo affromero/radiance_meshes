@@ -129,9 +129,9 @@ def set_pose(camera, T):
     return camera
 
 
-def load_dataset(source_path, images_folder, data_device, eval, white_background=True, resolution_scale=1.0, resolution=-1, apply_pcd=True, init_ply=None):
+def load_dataset(source_path, images_folder, data_device, eval, white_background=True, resolution_scale=1.0, resolution=-1, apply_pcd=True, init_ply=None, llffhold=8):
     if os.path.exists(os.path.join(source_path, "sparse")):
-        scene_info = sceneLoadTypeCallbacks["Colmap"](source_path, images_folder, eval)
+        scene_info = sceneLoadTypeCallbacks["Colmap"](source_path, images_folder, eval, llffhold=llffhold)
     elif os.path.exists(os.path.join(source_path, "transforms_train.json")):
         print("Found transforms_train.json file, assuming Blender data set!")
         scene_info = sceneLoadTypeCallbacks["Blender"](source_path, white_background, eval)
